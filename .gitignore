@@ -1,0 +1,20 @@
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Generated data files
+scripts/python/data/*.csv
+scripts/python/data/*.json
+
+# Parameter files with secrets
+*.parameters.json
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
