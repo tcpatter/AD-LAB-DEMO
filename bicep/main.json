@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "8347649937269536622"
+      "templateHash": "18174633223532816150"
     }
   },
   "parameters": {
@@ -13,15 +13,10 @@
       "type": "string",
       "allowedValues": [
         "infra",
-        "vms",
-        "primarydc",
-        "dns-peering",
-        "secondarydc",
-        "appservers",
-        "adconfig"
+        "vms"
       ],
       "metadata": {
-        "description": "Deployment phase: infra, vms, primarydc, dns-peering, secondarydc, appservers, adconfig"
+        "description": "Deployment phase: infra or vms"
       }
     },
     "adminUsername": {
@@ -55,6 +50,13 @@
         "description": "SAS token for accessing scripts in blob storage"
       }
     },
+    "adminSourceIP": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Source IP address allowed for direct RDP access (e.g. your public IP)"
+      }
+    },
     "tags": {
       "type": "object",
       "defaultValue": {
@@ -68,16 +70,11 @@
   },
   "variables": {
     "eastRegion": "eastus2",
-    "centralRegion": "northcentralus",
+    "westRegion": "centralus",
     "rgNameEast": "rg-ADLab-East",
-    "rgNameCentral": "rg-ADLab-Central",
+    "rgNameWest": "rg-ADLab-West",
     "eastVnetName": "vnet-adlab-east",
-    "centralVnetName": "vnet-adlab-central",
-    "domainName": "managed-connections.net",
-    "netbiosName": "MANAGEDCONN",
-    "primaryDcIp": "10.1.1.4",
-    "secondaryDcIp": "10.2.1.4",
-    "scriptBaseUrl": "[format('https://{0}.blob.{1}/scripts/', parameters('storageAccountName'), environment().suffixes.storage)]"
+    "westVnetName": "vnet-adlab-west"
   },
   "resources": [
     {
@@ -92,8 +89,8 @@
       "condition": "[equals(parameters('deployPhase'), 'infra')]",
       "type": "Microsoft.Resources/resourceGroups",
       "apiVersion": "2024-03-01",
-      "name": "[variables('rgNameCentral')]",
-      "location": "[variables('centralRegion')]",
+      "name": "[variables('rgNameWest')]",
+      "location": "[variables('westRegion')]",
       "tags": "[parameters('tags')]"
     },
     {
@@ -118,18 +115,7 @@
             "value": "[parameters('tags')]"
           },
           "securityRules": {
-            "value": [
-              {
-                "name": "AllowRDP",
-                "priority": 100,
-                "direction": "Inbound",
-                "access": "Allow",
-                "protocol": "Tcp",
-                "destinationPortRange": "3389",
-                "sourceAddressPrefix": "VirtualNetwork",
-                "destinationAddressPrefix": "*"
-              }
-            ]
+            "value": "[concat(createArray(createObject('name', 'AllowRDP', 'priority', 100, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'destinationPortRange', '3389', 'sourceAddressPrefix', 'VirtualNetwork', 'destinationAddressPrefix', '*')), if(not(equals(parameters('adminSourceIP'), '')), createArray(createObject('name', 'AllowRDP-AdminIP', 'priority', 110, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'destinationPortRange', '3389', 'sourceAddressPrefix', parameters('adminSourceIP'), 'destinationAddressPrefix', '*')), createArray()))]"
           }
         },
         "template": {
@@ -557,8 +543,8 @@
       "condition": "[equals(parameters('deployPhase'), 'infra')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "nsg-central-dc",
-      "resourceGroup": "[variables('rgNameCentral')]",
+      "name": "nsg-west-dc",
+      "resourceGroup": "[variables('rgNameWest')]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -566,10 +552,10 @@
         "mode": "Incremental",
         "parameters": {
           "nsgName": {
-            "value": "nsg-adlab-central-dc"
+            "value": "nsg-adlab-west-dc"
           },
           "location": {
-            "value": "[variables('centralRegion')]"
+            "value": "[variables('westRegion')]"
           },
           "tags": {
             "value": "[parameters('tags')]"
@@ -671,15 +657,15 @@
         }
       },
       "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameCentral'))]"
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameWest'))]"
       ]
     },
     {
       "condition": "[equals(parameters('deployPhase'), 'infra')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "nsg-central-app",
-      "resourceGroup": "[variables('rgNameCentral')]",
+      "name": "nsg-west-app",
+      "resourceGroup": "[variables('rgNameWest')]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -687,10 +673,10 @@
         "mode": "Incremental",
         "parameters": {
           "nsgName": {
-            "value": "nsg-adlab-central-app"
+            "value": "nsg-adlab-west-app"
           },
           "location": {
-            "value": "[variables('centralRegion')]"
+            "value": "[variables('westRegion')]"
           },
           "tags": {
             "value": "[parameters('tags')]"
@@ -812,15 +798,15 @@
         }
       },
       "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameCentral'))]"
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameWest'))]"
       ]
     },
     {
       "condition": "[equals(parameters('deployPhase'), 'infra')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "nsg-central-bastion",
-      "resourceGroup": "[variables('rgNameCentral')]",
+      "name": "nsg-west-bastion",
+      "resourceGroup": "[variables('rgNameWest')]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -828,10 +814,10 @@
         "mode": "Incremental",
         "parameters": {
           "nsgName": {
-            "value": "nsg-adlab-central-bastion"
+            "value": "nsg-adlab-west-bastion"
           },
           "location": {
-            "value": "[variables('centralRegion')]"
+            "value": "[variables('westRegion')]"
           },
           "tags": {
             "value": "[parameters('tags')]"
@@ -1007,7 +993,7 @@
         }
       },
       "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameCentral'))]"
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameWest'))]"
       ]
     },
     {
@@ -1164,8 +1150,8 @@
       "condition": "[equals(parameters('deployPhase'), 'infra')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "vnet-central",
-      "resourceGroup": "[variables('rgNameCentral')]",
+      "name": "vnet-west",
+      "resourceGroup": "[variables('rgNameWest')]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -1173,13 +1159,13 @@
         "mode": "Incremental",
         "parameters": {
           "vnetName": {
-            "value": "[variables('centralVnetName')]"
+            "value": "[variables('westVnetName')]"
           },
           "location": {
-            "value": "[variables('centralRegion')]"
+            "value": "[variables('westRegion')]"
           },
           "addressPrefix": {
-            "value": "10.2.0.0/16"
+            "value": "10.3.0.0/16"
           },
           "tags": {
             "value": "[parameters('tags')]"
@@ -1188,18 +1174,18 @@
             "value": [
               {
                 "name": "snet-dc",
-                "addressPrefix": "10.2.1.0/24",
-                "nsgId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Resources/deployments', 'nsg-central-dc'), '2025-04-01').outputs.nsgId.value]"
+                "addressPrefix": "10.3.1.0/24",
+                "nsgId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Resources/deployments', 'nsg-west-dc'), '2025-04-01').outputs.nsgId.value]"
               },
               {
                 "name": "snet-app",
-                "addressPrefix": "10.2.2.0/24",
-                "nsgId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Resources/deployments', 'nsg-central-app'), '2025-04-01').outputs.nsgId.value]"
+                "addressPrefix": "10.3.2.0/24",
+                "nsgId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Resources/deployments', 'nsg-west-app'), '2025-04-01').outputs.nsgId.value]"
               },
               {
                 "name": "AzureBastionSubnet",
-                "addressPrefix": "10.2.3.0/24",
-                "nsgId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Resources/deployments', 'nsg-central-bastion'), '2025-04-01').outputs.nsgId.value]"
+                "addressPrefix": "10.3.3.0/24",
+                "nsgId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Resources/deployments', 'nsg-west-bastion'), '2025-04-01').outputs.nsgId.value]"
               }
             ]
           }
@@ -1304,10 +1290,10 @@
         }
       },
       "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Resources/deployments', 'nsg-central-app')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Resources/deployments', 'nsg-central-bastion')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Resources/deployments', 'nsg-central-dc')]",
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameCentral'))]"
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Resources/deployments', 'nsg-west-app')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Resources/deployments', 'nsg-west-bastion')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Resources/deployments', 'nsg-west-dc')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameWest'))]"
       ]
     },
     {
@@ -1342,7 +1328,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "16433948544764384497"
+              "templateHash": "2778919950933847887"
             }
           },
           "parameters": {
@@ -1393,9 +1379,11 @@
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "sku": {
-                "name": "Basic"
+                "name": "Standard"
               },
               "properties": {
+                "enableTunneling": true,
+                "enableIpConnect": true,
                 "ipConfigurations": [
                   {
                     "name": "IpConf",
@@ -1432,8 +1420,8 @@
       "condition": "[equals(parameters('deployPhase'), 'infra')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "bastion-central",
-      "resourceGroup": "[variables('rgNameCentral')]",
+      "name": "bastion-west",
+      "resourceGroup": "[variables('rgNameWest')]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -1441,13 +1429,13 @@
         "mode": "Incremental",
         "parameters": {
           "bastionName": {
-            "value": "bas-adlab-central"
+            "value": "bas-adlab-west"
           },
           "location": {
-            "value": "[variables('centralRegion')]"
+            "value": "[variables('westRegion')]"
           },
           "subnetId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Resources/deployments', 'vnet-central'), '2025-04-01').outputs.subnetIds.value[2]]"
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Resources/deployments', 'vnet-west'), '2025-04-01').outputs.subnetIds.value[2]]"
           },
           "tags": {
             "value": "[parameters('tags')]"
@@ -1460,7 +1448,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "16433948544764384497"
+              "templateHash": "2778919950933847887"
             }
           },
           "parameters": {
@@ -1511,9 +1499,11 @@
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "sku": {
-                "name": "Basic"
+                "name": "Standard"
               },
               "properties": {
+                "enableTunneling": true,
+                "enableIpConnect": true,
                 "ipConfigurations": [
                   {
                     "name": "IpConf",
@@ -1542,8 +1532,8 @@
         }
       },
       "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameCentral'))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Resources/deployments', 'vnet-central')]"
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNameWest'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Resources/deployments', 'vnet-west')]"
       ]
     },
     {
@@ -1695,10 +1685,243 @@
             "value": "[parameters('adminPassword')]"
           },
           "privateIpAddress": {
-            "value": "[variables('primaryDcIp')]"
+            "value": "10.1.1.4"
           },
           "createPublicIp": {
-            "value": true
+            "value": false
+          },
+          "nsgId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameEast')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-east-dc')]"
+          },
+          "dataDiskSizeGB": {
+            "value": 20
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.40.2.10011",
+              "templateHash": "16911712368447318314"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Virtual Machine"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Location for the VM"
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet ID for the NIC"
+              }
+            },
+            "vmSize": {
+              "type": "string",
+              "defaultValue": "Standard_B2s",
+              "metadata": {
+                "description": "VM size"
+              }
+            },
+            "adminUsername": {
+              "type": "string",
+              "metadata": {
+                "description": "Admin username"
+              }
+            },
+            "adminPassword": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Admin password"
+              }
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Static private IP address (empty = dynamic)"
+              }
+            },
+            "createPublicIp": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Whether to create a public IP"
+              }
+            },
+            "nsgId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "NSG ID to associate with the NIC"
+              }
+            },
+            "dataDiskSizeGB": {
+              "type": "int",
+              "defaultValue": 0,
+              "metadata": {
+                "description": "Size of optional data disk in GB (0 = no data disk)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags for the resource"
+              }
+            }
+          },
+          "resources": [
+            {
+              "condition": "[parameters('createPublicIp')]",
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2024-01-01",
+              "name": "[format('{0}-pip', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "publicIPAllocationMethod": "Static"
+              }
+            },
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2024-01-01",
+              "name": "[format('{0}-nic', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "privateIPAllocationMethod": "[if(empty(parameters('privateIpAddress')), 'Dynamic', 'Static')]",
+                      "privateIPAddress": "[if(empty(parameters('privateIpAddress')), null(), parameters('privateIpAddress'))]",
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "publicIPAddress": "[if(parameters('createPublicIp'), createObject('id', resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName')))), null())]"
+                    }
+                  }
+                ],
+                "networkSecurityGroup": "[if(not(empty(parameters('nsgId'))), createObject('id', parameters('nsgId')), null())]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('vmName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "osProfile": {
+                  "computerName": "[parameters('vmName')]",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]"
+                },
+                "storageProfile": {
+                  "imageReference": {
+                    "publisher": "MicrosoftWindowsServer",
+                    "offer": "WindowsServer",
+                    "sku": "2022-datacenter-azure-edition",
+                    "version": "latest"
+                  },
+                  "osDisk": {
+                    "name": "[format('{0}-osdisk', parameters('vmName'))]",
+                    "createOption": "FromImage",
+                    "managedDisk": {
+                      "storageAccountType": "StandardSSD_LRS"
+                    }
+                  },
+                  "dataDisks": "[if(greater(parameters('dataDiskSizeGB'), 0), createArray(createObject('name', format('{0}-datadisk', parameters('vmName')), 'diskSizeGB', parameters('dataDiskSizeGB'), 'lun', 0, 'createOption', 'Empty', 'managedDisk', createObject('storageAccountType', 'StandardSSD_LRS'))), createArray())]"
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "vmId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+            },
+            "vmName": {
+              "type": "string",
+              "value": "[parameters('vmName')]"
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName'))), '2024-01-01').ipConfigurations[0].properties.privateIPAddress]"
+            },
+            "publicIpAddress": {
+              "type": "string",
+              "value": "[if(parameters('createPublicIp'), reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName'))), '2024-01-01').ipAddress, '')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[equals(parameters('deployPhase'), 'vms')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "vm-dvdc02",
+      "resourceGroup": "[variables('rgNameEast')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "DVDC02"
+          },
+          "location": {
+            "value": "[variables('eastRegion')]"
+          },
+          "subnetId": {
+            "value": "[format('{0}/subnets/snet-dc', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameEast')), 'Microsoft.Network/virtualNetworks', variables('eastVnetName')))]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "privateIpAddress": {
+            "value": "10.1.1.5"
+          },
+          "createPublicIp": {
+            "value": false
           },
           "nsgId": {
             "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameEast')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-east-dc')]"
@@ -1931,7 +2154,7 @@
             "value": "10.1.2.4"
           },
           "createPublicIp": {
-            "value": true
+            "value": false
           },
           "nsgId": {
             "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameEast')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-east-app')]"
@@ -2134,8 +2357,8 @@
       "condition": "[equals(parameters('deployPhase'), 'vms')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "vm-dvdc02",
-      "resourceGroup": "[variables('rgNameCentral')]",
+      "name": "vm-dvas02",
+      "resourceGroup": "[variables('rgNameEast')]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -2143,13 +2366,13 @@
         "mode": "Incremental",
         "parameters": {
           "vmName": {
-            "value": "DVDC02"
+            "value": "DVAS02"
           },
           "location": {
-            "value": "[variables('centralRegion')]"
+            "value": "[variables('eastRegion')]"
           },
           "subnetId": {
-            "value": "[format('{0}/subnets/snet-dc', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Network/virtualNetworks', variables('centralVnetName')))]"
+            "value": "[format('{0}/subnets/snet-app', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameEast')), 'Microsoft.Network/virtualNetworks', variables('eastVnetName')))]"
           },
           "adminUsername": {
             "value": "[parameters('adminUsername')]"
@@ -2158,13 +2381,243 @@
             "value": "[parameters('adminPassword')]"
           },
           "privateIpAddress": {
-            "value": "[variables('secondaryDcIp')]"
+            "value": "10.1.2.5"
           },
           "createPublicIp": {
-            "value": true
+            "value": false
           },
           "nsgId": {
-            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-central-dc')]"
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameEast')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-east-app')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.40.2.10011",
+              "templateHash": "16911712368447318314"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Virtual Machine"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Location for the VM"
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet ID for the NIC"
+              }
+            },
+            "vmSize": {
+              "type": "string",
+              "defaultValue": "Standard_B2s",
+              "metadata": {
+                "description": "VM size"
+              }
+            },
+            "adminUsername": {
+              "type": "string",
+              "metadata": {
+                "description": "Admin username"
+              }
+            },
+            "adminPassword": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Admin password"
+              }
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Static private IP address (empty = dynamic)"
+              }
+            },
+            "createPublicIp": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Whether to create a public IP"
+              }
+            },
+            "nsgId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "NSG ID to associate with the NIC"
+              }
+            },
+            "dataDiskSizeGB": {
+              "type": "int",
+              "defaultValue": 0,
+              "metadata": {
+                "description": "Size of optional data disk in GB (0 = no data disk)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags for the resource"
+              }
+            }
+          },
+          "resources": [
+            {
+              "condition": "[parameters('createPublicIp')]",
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2024-01-01",
+              "name": "[format('{0}-pip', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "publicIPAllocationMethod": "Static"
+              }
+            },
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2024-01-01",
+              "name": "[format('{0}-nic', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "privateIPAllocationMethod": "[if(empty(parameters('privateIpAddress')), 'Dynamic', 'Static')]",
+                      "privateIPAddress": "[if(empty(parameters('privateIpAddress')), null(), parameters('privateIpAddress'))]",
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "publicIPAddress": "[if(parameters('createPublicIp'), createObject('id', resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName')))), null())]"
+                    }
+                  }
+                ],
+                "networkSecurityGroup": "[if(not(empty(parameters('nsgId'))), createObject('id', parameters('nsgId')), null())]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('vmName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "osProfile": {
+                  "computerName": "[parameters('vmName')]",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]"
+                },
+                "storageProfile": {
+                  "imageReference": {
+                    "publisher": "MicrosoftWindowsServer",
+                    "offer": "WindowsServer",
+                    "sku": "2022-datacenter-azure-edition",
+                    "version": "latest"
+                  },
+                  "osDisk": {
+                    "name": "[format('{0}-osdisk', parameters('vmName'))]",
+                    "createOption": "FromImage",
+                    "managedDisk": {
+                      "storageAccountType": "StandardSSD_LRS"
+                    }
+                  },
+                  "dataDisks": "[if(greater(parameters('dataDiskSizeGB'), 0), createArray(createObject('name', format('{0}-datadisk', parameters('vmName')), 'diskSizeGB', parameters('dataDiskSizeGB'), 'lun', 0, 'createOption', 'Empty', 'managedDisk', createObject('storageAccountType', 'StandardSSD_LRS'))), createArray())]"
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "vmId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+            },
+            "vmName": {
+              "type": "string",
+              "value": "[parameters('vmName')]"
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName'))), '2024-01-01').ipConfigurations[0].properties.privateIPAddress]"
+            },
+            "publicIpAddress": {
+              "type": "string",
+              "value": "[if(parameters('createPublicIp'), reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName'))), '2024-01-01').ipAddress, '')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[equals(parameters('deployPhase'), 'vms')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "vm-dvdc03",
+      "resourceGroup": "[variables('rgNameWest')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "DVDC03"
+          },
+          "location": {
+            "value": "[variables('westRegion')]"
+          },
+          "subnetId": {
+            "value": "[format('{0}/subnets/snet-dc', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Network/virtualNetworks', variables('westVnetName')))]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "privateIpAddress": {
+            "value": "10.3.1.4"
+          },
+          "createPublicIp": {
+            "value": false
+          },
+          "nsgId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-west-dc')]"
           },
           "dataDiskSizeGB": {
             "value": 20
@@ -2367,8 +2820,8 @@
       "condition": "[equals(parameters('deployPhase'), 'vms')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "vm-dvas02",
-      "resourceGroup": "[variables('rgNameCentral')]",
+      "name": "vm-dvas03",
+      "resourceGroup": "[variables('rgNameWest')]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -2376,13 +2829,13 @@
         "mode": "Incremental",
         "parameters": {
           "vmName": {
-            "value": "DVAS02"
+            "value": "DVAS03"
           },
           "location": {
-            "value": "[variables('centralRegion')]"
+            "value": "[variables('westRegion')]"
           },
           "subnetId": {
-            "value": "[format('{0}/subnets/snet-app', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Network/virtualNetworks', variables('centralVnetName')))]"
+            "value": "[format('{0}/subnets/snet-app', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Network/virtualNetworks', variables('westVnetName')))]"
           },
           "adminUsername": {
             "value": "[parameters('adminUsername')]"
@@ -2391,13 +2844,13 @@
             "value": "[parameters('adminPassword')]"
           },
           "privateIpAddress": {
-            "value": "10.2.2.4"
+            "value": "10.3.2.4"
           },
           "createPublicIp": {
-            "value": true
+            "value": false
           },
           "nsgId": {
-            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-central-app')]"
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-west-app')]"
           },
           "tags": {
             "value": "[parameters('tags')]"
@@ -2594,11 +3047,11 @@
       }
     },
     {
-      "condition": "[equals(parameters('deployPhase'), 'primarydc')]",
+      "condition": "[equals(parameters('deployPhase'), 'vms')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "cse-dvdc01",
-      "resourceGroup": "[variables('rgNameEast')]",
+      "name": "vm-dvas04",
+      "resourceGroup": "[variables('rgNameWest')]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -2606,16 +3059,28 @@
         "mode": "Incremental",
         "parameters": {
           "vmName": {
-            "value": "DVDC01"
+            "value": "DVAS04"
           },
           "location": {
-            "value": "[variables('eastRegion')]"
+            "value": "[variables('westRegion')]"
           },
-          "scriptUri": {
-            "value": "[format('{0}Promote-PrimaryDC.ps1{1}', variables('scriptBaseUrl'), parameters('scriptSasToken'))]"
+          "subnetId": {
+            "value": "[format('{0}/subnets/snet-app', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Network/virtualNetworks', variables('westVnetName')))]"
           },
-          "commandToExecute": {
-            "value": "[format('powershell -ExecutionPolicy Unrestricted -File Promote-PrimaryDC.ps1 -DomainName {0} -NetBIOSName {1} -SafeModePassword \"{2}\"', variables('domainName'), variables('netbiosName'), parameters('safeModePassword'))]"
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "privateIpAddress": {
+            "value": "10.3.2.5"
+          },
+          "createPublicIp": {
+            "value": false
+          },
+          "nsgId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameWest')), 'Microsoft.Network/networkSecurityGroups', 'nsg-adlab-west-app')]"
           },
           "tags": {
             "value": "[parameters('tags')]"
@@ -2628,32 +3093,73 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "362053250435804166"
+              "templateHash": "16911712368447318314"
             }
           },
           "parameters": {
             "vmName": {
               "type": "string",
               "metadata": {
-                "description": "Name of the VM to attach the extension to"
+                "description": "Name of the Virtual Machine"
               }
             },
             "location": {
               "type": "string",
               "metadata": {
-                "description": "Location for the extension"
+                "description": "Location for the VM"
               }
             },
-            "scriptUri": {
+            "subnetId": {
               "type": "string",
               "metadata": {
-                "description": "URI of the script to execute"
+                "description": "Subnet ID for the NIC"
               }
             },
-            "commandToExecute": {
+            "vmSize": {
+              "type": "string",
+              "defaultValue": "Standard_B2s",
+              "metadata": {
+                "description": "VM size"
+              }
+            },
+            "adminUsername": {
               "type": "string",
               "metadata": {
-                "description": "Command to execute"
+                "description": "Admin username"
+              }
+            },
+            "adminPassword": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Admin password"
+              }
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Static private IP address (empty = dynamic)"
+              }
+            },
+            "createPublicIp": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Whether to create a public IP"
+              }
+            },
+            "nsgId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "NSG ID to associate with the NIC"
+              }
+            },
+            "dataDiskSizeGB": {
+              "type": "int",
+              "defaultValue": 0,
+              "metadata": {
+                "description": "Size of optional data disk in GB (0 = no data disk)"
               }
             },
             "tags": {
@@ -2666,536 +3172,105 @@
           },
           "resources": [
             {
-              "type": "Microsoft.Compute/virtualMachines/extensions",
-              "apiVersion": "2024-03-01",
-              "name": "[format('{0}/CustomScriptExtension', parameters('vmName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "publisher": "Microsoft.Compute",
-                "type": "CustomScriptExtension",
-                "typeHandlerVersion": "1.10",
-                "autoUpgradeMinorVersion": true,
-                "settings": {
-                  "fileUris": [
-                    "[parameters('scriptUri')]"
-                  ]
-                },
-                "protectedSettings": {
-                  "commandToExecute": "[parameters('commandToExecute')]"
-                }
-              }
-            }
-          ],
-          "outputs": {
-            "extensionId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/CustomScriptExtension', parameters('vmName')), '/')[0], split(format('{0}/CustomScriptExtension', parameters('vmName')), '/')[1])]"
-            }
-          }
-        }
-      }
-    },
-    {
-      "condition": "[equals(parameters('deployPhase'), 'dns-peering')]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "peering-east-to-central",
-      "resourceGroup": "[variables('rgNameEast')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "peeringName": {
-            "value": "peer-east-to-central"
-          },
-          "localVnetName": {
-            "value": "[variables('eastVnetName')]"
-          },
-          "remoteVnetId": {
-            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameCentral')), 'Microsoft.Network/virtualNetworks', variables('centralVnetName'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "6052054527901231946"
-            }
-          },
-          "parameters": {
-            "peeringName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the peering connection"
-              }
-            },
-            "localVnetName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the local VNet"
-              }
-            },
-            "remoteVnetId": {
-              "type": "string",
-              "metadata": {
-                "description": "Resource ID of the remote VNet"
-              }
-            },
-            "allowForwardedTraffic": {
-              "type": "bool",
-              "defaultValue": true,
-              "metadata": {
-                "description": "Allow forwarded traffic"
-              }
-            },
-            "allowGatewayTransit": {
-              "type": "bool",
-              "defaultValue": false,
-              "metadata": {
-                "description": "Allow gateway transit"
-              }
-            },
-            "useRemoteGateways": {
-              "type": "bool",
-              "defaultValue": false,
-              "metadata": {
-                "description": "Use remote gateways"
-              }
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+              "condition": "[parameters('createPublicIp')]",
+              "type": "Microsoft.Network/publicIPAddresses",
               "apiVersion": "2024-01-01",
-              "name": "[format('{0}/{1}', parameters('localVnetName'), parameters('peeringName'))]",
+              "name": "[format('{0}-pip', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard"
+              },
               "properties": {
-                "remoteVirtualNetwork": {
-                  "id": "[parameters('remoteVnetId')]"
-                },
-                "allowVirtualNetworkAccess": true,
-                "allowForwardedTraffic": "[parameters('allowForwardedTraffic')]",
-                "allowGatewayTransit": "[parameters('allowGatewayTransit')]",
-                "useRemoteGateways": "[parameters('useRemoteGateways')]"
-              }
-            }
-          ],
-          "outputs": {
-            "peeringId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', split(format('{0}/{1}', parameters('localVnetName'), parameters('peeringName')), '/')[0], split(format('{0}/{1}', parameters('localVnetName'), parameters('peeringName')), '/')[1])]"
-            }
-          }
-        }
-      }
-    },
-    {
-      "condition": "[equals(parameters('deployPhase'), 'dns-peering')]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "peering-central-to-east",
-      "resourceGroup": "[variables('rgNameCentral')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "peeringName": {
-            "value": "peer-central-to-east"
-          },
-          "localVnetName": {
-            "value": "[variables('centralVnetName')]"
-          },
-          "remoteVnetId": {
-            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNameEast')), 'Microsoft.Network/virtualNetworks', variables('eastVnetName'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "6052054527901231946"
-            }
-          },
-          "parameters": {
-            "peeringName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the peering connection"
+                "publicIPAllocationMethod": "Static"
               }
             },
-            "localVnetName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the local VNet"
-              }
-            },
-            "remoteVnetId": {
-              "type": "string",
-              "metadata": {
-                "description": "Resource ID of the remote VNet"
-              }
-            },
-            "allowForwardedTraffic": {
-              "type": "bool",
-              "defaultValue": true,
-              "metadata": {
-                "description": "Allow forwarded traffic"
-              }
-            },
-            "allowGatewayTransit": {
-              "type": "bool",
-              "defaultValue": false,
-              "metadata": {
-                "description": "Allow gateway transit"
-              }
-            },
-            "useRemoteGateways": {
-              "type": "bool",
-              "defaultValue": false,
-              "metadata": {
-                "description": "Use remote gateways"
-              }
-            }
-          },
-          "resources": [
             {
-              "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+              "type": "Microsoft.Network/networkInterfaces",
               "apiVersion": "2024-01-01",
-              "name": "[format('{0}/{1}', parameters('localVnetName'), parameters('peeringName'))]",
-              "properties": {
-                "remoteVirtualNetwork": {
-                  "id": "[parameters('remoteVnetId')]"
-                },
-                "allowVirtualNetworkAccess": true,
-                "allowForwardedTraffic": "[parameters('allowForwardedTraffic')]",
-                "allowGatewayTransit": "[parameters('allowGatewayTransit')]",
-                "useRemoteGateways": "[parameters('useRemoteGateways')]"
-              }
-            }
-          ],
-          "outputs": {
-            "peeringId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', split(format('{0}/{1}', parameters('localVnetName'), parameters('peeringName')), '/')[0], split(format('{0}/{1}', parameters('localVnetName'), parameters('peeringName')), '/')[1])]"
-            }
-          }
-        }
-      }
-    },
-    {
-      "condition": "[equals(parameters('deployPhase'), 'secondarydc')]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "cse-dvdc02",
-      "resourceGroup": "[variables('rgNameCentral')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "vmName": {
-            "value": "DVDC02"
-          },
-          "location": {
-            "value": "[variables('centralRegion')]"
-          },
-          "scriptUri": {
-            "value": "[format('{0}Promote-SecondaryDC.ps1{1}', variables('scriptBaseUrl'), parameters('scriptSasToken'))]"
-          },
-          "commandToExecute": {
-            "value": "[format('powershell -ExecutionPolicy Unrestricted -File Promote-SecondaryDC.ps1 -DomainName {0} -PrimaryDcIp {1} -SafeModePassword \"{2}\" -DomainAdminUser \"{3}\" -DomainAdminPassword \"{4}\"', variables('domainName'), variables('primaryDcIp'), parameters('safeModePassword'), parameters('adminUsername'), parameters('adminPassword'))]"
-          },
-          "tags": {
-            "value": "[parameters('tags')]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "362053250435804166"
-            }
-          },
-          "parameters": {
-            "vmName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the VM to attach the extension to"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Location for the extension"
-              }
-            },
-            "scriptUri": {
-              "type": "string",
-              "metadata": {
-                "description": "URI of the script to execute"
-              }
-            },
-            "commandToExecute": {
-              "type": "string",
-              "metadata": {
-                "description": "Command to execute"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags for the resource"
-              }
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Compute/virtualMachines/extensions",
-              "apiVersion": "2024-03-01",
-              "name": "[format('{0}/CustomScriptExtension', parameters('vmName'))]",
+              "name": "[format('{0}-nic', parameters('vmName'))]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "properties": {
-                "publisher": "Microsoft.Compute",
-                "type": "CustomScriptExtension",
-                "typeHandlerVersion": "1.10",
-                "autoUpgradeMinorVersion": true,
-                "settings": {
-                  "fileUris": [
-                    "[parameters('scriptUri')]"
-                  ]
-                },
-                "protectedSettings": {
-                  "commandToExecute": "[parameters('commandToExecute')]"
-                }
-              }
-            }
-          ],
-          "outputs": {
-            "extensionId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/CustomScriptExtension', parameters('vmName')), '/')[0], split(format('{0}/CustomScriptExtension', parameters('vmName')), '/')[1])]"
-            }
-          }
-        }
-      }
-    },
-    {
-      "condition": "[equals(parameters('deployPhase'), 'appservers')]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "cse-dvas01",
-      "resourceGroup": "[variables('rgNameEast')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "vmName": {
-            "value": "DVAS01"
-          },
-          "location": {
-            "value": "[variables('eastRegion')]"
-          },
-          "scriptUri": {
-            "value": "[format('{0}Join-DomainAndConfigure.ps1{1}', variables('scriptBaseUrl'), parameters('scriptSasToken'))]"
-          },
-          "commandToExecute": {
-            "value": "[format('powershell -ExecutionPolicy Unrestricted -File Join-DomainAndConfigure.ps1 -DomainName {0} -DcIpAddress {1} -DomainAdminUser \"{2}\" -DomainAdminPassword \"{3}\"', variables('domainName'), variables('primaryDcIp'), parameters('adminUsername'), parameters('adminPassword'))]"
-          },
-          "tags": {
-            "value": "[parameters('tags')]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "362053250435804166"
-            }
-          },
-          "parameters": {
-            "vmName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the VM to attach the extension to"
-              }
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "privateIPAllocationMethod": "[if(empty(parameters('privateIpAddress')), 'Dynamic', 'Static')]",
+                      "privateIPAddress": "[if(empty(parameters('privateIpAddress')), null(), parameters('privateIpAddress'))]",
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "publicIPAddress": "[if(parameters('createPublicIp'), createObject('id', resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName')))), null())]"
+                    }
+                  }
+                ],
+                "networkSecurityGroup": "[if(not(empty(parameters('nsgId'))), createObject('id', parameters('nsgId')), null())]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName')))]"
+              ]
             },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Location for the extension"
-              }
-            },
-            "scriptUri": {
-              "type": "string",
-              "metadata": {
-                "description": "URI of the script to execute"
-              }
-            },
-            "commandToExecute": {
-              "type": "string",
-              "metadata": {
-                "description": "Command to execute"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags for the resource"
-              }
-            }
-          },
-          "resources": [
             {
-              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
-              "name": "[format('{0}/CustomScriptExtension', parameters('vmName'))]",
+              "name": "[parameters('vmName')]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "properties": {
-                "publisher": "Microsoft.Compute",
-                "type": "CustomScriptExtension",
-                "typeHandlerVersion": "1.10",
-                "autoUpgradeMinorVersion": true,
-                "settings": {
-                  "fileUris": [
-                    "[parameters('scriptUri')]"
-                  ]
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
                 },
-                "protectedSettings": {
-                  "commandToExecute": "[parameters('commandToExecute')]"
+                "osProfile": {
+                  "computerName": "[parameters('vmName')]",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]"
+                },
+                "storageProfile": {
+                  "imageReference": {
+                    "publisher": "MicrosoftWindowsServer",
+                    "offer": "WindowsServer",
+                    "sku": "2022-datacenter-azure-edition",
+                    "version": "latest"
+                  },
+                  "osDisk": {
+                    "name": "[format('{0}-osdisk', parameters('vmName'))]",
+                    "createOption": "FromImage",
+                    "managedDisk": {
+                      "storageAccountType": "StandardSSD_LRS"
+                    }
+                  },
+                  "dataDisks": "[if(greater(parameters('dataDiskSizeGB'), 0), createArray(createObject('name', format('{0}-datadisk', parameters('vmName')), 'diskSizeGB', parameters('dataDiskSizeGB'), 'lun', 0, 'createOption', 'Empty', 'managedDisk', createObject('storageAccountType', 'StandardSSD_LRS'))), createArray())]"
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]"
+                    }
+                  ]
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]"
+              ]
             }
           ],
           "outputs": {
-            "extensionId": {
+            "vmId": {
               "type": "string",
-              "value": "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/CustomScriptExtension', parameters('vmName')), '/')[0], split(format('{0}/CustomScriptExtension', parameters('vmName')), '/')[1])]"
-            }
-          }
-        }
-      }
-    },
-    {
-      "condition": "[equals(parameters('deployPhase'), 'appservers')]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "cse-dvas02",
-      "resourceGroup": "[variables('rgNameCentral')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "vmName": {
-            "value": "DVAS02"
-          },
-          "location": {
-            "value": "[variables('centralRegion')]"
-          },
-          "scriptUri": {
-            "value": "[format('{0}Join-DomainAndConfigure.ps1{1}', variables('scriptBaseUrl'), parameters('scriptSasToken'))]"
-          },
-          "commandToExecute": {
-            "value": "[format('powershell -ExecutionPolicy Unrestricted -File Join-DomainAndConfigure.ps1 -DomainName {0} -DcIpAddress {1} -DomainAdminUser \"{2}\" -DomainAdminPassword \"{3}\"', variables('domainName'), variables('secondaryDcIp'), parameters('adminUsername'), parameters('adminPassword'))]"
-          },
-          "tags": {
-            "value": "[parameters('tags')]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "362053250435804166"
-            }
-          },
-          "parameters": {
+              "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+            },
             "vmName": {
               "type": "string",
-              "metadata": {
-                "description": "Name of the VM to attach the extension to"
-              }
+              "value": "[parameters('vmName')]"
             },
-            "location": {
+            "privateIpAddress": {
               "type": "string",
-              "metadata": {
-                "description": "Location for the extension"
-              }
+              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName'))), '2024-01-01').ipConfigurations[0].properties.privateIPAddress]"
             },
-            "scriptUri": {
+            "publicIpAddress": {
               "type": "string",
-              "metadata": {
-                "description": "URI of the script to execute"
-              }
-            },
-            "commandToExecute": {
-              "type": "string",
-              "metadata": {
-                "description": "Command to execute"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags for the resource"
-              }
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Compute/virtualMachines/extensions",
-              "apiVersion": "2024-03-01",
-              "name": "[format('{0}/CustomScriptExtension', parameters('vmName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "publisher": "Microsoft.Compute",
-                "type": "CustomScriptExtension",
-                "typeHandlerVersion": "1.10",
-                "autoUpgradeMinorVersion": true,
-                "settings": {
-                  "fileUris": [
-                    "[parameters('scriptUri')]"
-                  ]
-                },
-                "protectedSettings": {
-                  "commandToExecute": "[parameters('commandToExecute')]"
-                }
-              }
-            }
-          ],
-          "outputs": {
-            "extensionId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/CustomScriptExtension', parameters('vmName')), '/')[0], split(format('{0}/CustomScriptExtension', parameters('vmName')), '/')[1])]"
+              "value": "[if(parameters('createPublicIp'), reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('vmName'))), '2024-01-01').ipAddress, '')]"
             }
           }
         }

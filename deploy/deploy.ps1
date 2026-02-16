@@ -2,18 +2,14 @@
 
 <#
 .SYNOPSIS
-    7-phase deployment orchestrator for the AD Lab environment.
+    3-phase deployment orchestrator for the AD Lab environment (infra + VMs + validation).
 .DESCRIPTION
-    Deploys the AD Lab in phases to respect dependency ordering:
-      1. Infra    - RGs, VNets, NSGs, Bastion, Storage, upload scripts
-      2. VMs      - All 4 VMs (Azure default DNS, no domain config)
-      3. PrimaryDC - CSE on DVDC01 → promote → wait for reboot + stabilize
-      4. DNS+Peering - Update VNet DNS to DC IPs, create bidirectional peering
-      5. SecondaryDC - CSE on DVDC02 → replicate → wait
-      6. AppServers  - CSE on DVAS01/DVAS02 → domain join + install roles
-      7. ADConfig    - OUs → Users via Invoke-AzVMRunCommand
+    Deploys the AD Lab in phases:
+      1. Infra     - RGs, VNets, NSGs, Bastion, Storage, upload scripts
+      2. VMs       - All 7 VMs (no domain config, Bastion-only access)
+      3. Validate  - Bastion tunnel test to each VM via Invoke-AzVMRunCommand
 .PARAMETER Phase
-    Which phase(s) to run: 1-7, 'all', or comma-separated (e.g., '1,2,3')
+    Which phase(s) to run: 1-3, 'all', or comma-separated (e.g., '1,2,3')
 .PARAMETER AdminPassword
     Password for the VM local admin account
 .PARAMETER SafeModePassword
@@ -46,11 +42,12 @@ $config = @{
     AdminUsername        = 'labadmin'
     StorageAccountName  = 'stadlabscripts01'
     RgEast              = 'rg-ADLab-East'
-    RgCentral           = 'rg-ADLab-Central'
+    RgWest              = 'rg-ADLab-West'
     VnetEast            = 'vnet-adlab-east'
-    VnetCentral         = 'vnet-adlab-central'
+    VnetWest            = 'vnet-adlab-west'
     PrimaryDcIp         = '10.1.1.4'
-    SecondaryDcIp       = '10.2.1.4'
+    SecondaryDcIp       = '10.1.1.5'
+    WestDcIp            = '10.3.1.4'
     DomainName          = 'managed-connections.net'
     DomainDN            = 'DC=managed-connections,DC=net'
     ScriptsPath         = Join-Path $PSScriptRoot '..\scripts\powershell'
@@ -171,7 +168,7 @@ function Upload-ScriptsToStorage {
 
 # Determine which phases to run
 $phases = if ($Phase -eq 'all') {
-    1..7
+    1..3
 } else {
     $Phase -split ',' | ForEach-Object { [int]$_.Trim() }
 }
@@ -194,160 +191,92 @@ foreach ($p in $phases) {
 
         2 {
             Write-Host "`n╔══════════════════════════════════════════╗" -ForegroundColor Green
-            Write-Host "║  PHASE 2: Virtual Machines               ║" -ForegroundColor Green
+            Write-Host "║  PHASE 2: Virtual Machines (7 VMs)       ║" -ForegroundColor Green
             Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Green
 
             Deploy-BicepPhase -PhaseName 'vms'
+
+            # Wait for all VMs to be provisioned and agent ready
+            $allVMs = @(
+                @{ RG = $config.RgEast; Name = 'DVDC01' }
+                @{ RG = $config.RgEast; Name = 'DVDC02' }
+                @{ RG = $config.RgEast; Name = 'DVAS01' }
+                @{ RG = $config.RgEast; Name = 'DVAS02' }
+                @{ RG = $config.RgWest; Name = 'DVDC03' }
+                @{ RG = $config.RgWest; Name = 'DVAS03' }
+                @{ RG = $config.RgWest; Name = 'DVAS04' }
+            )
+
+            Write-Host "`nWaiting for all 7 VMs to report agent ready..." -ForegroundColor Yellow
+            foreach ($vm in $allVMs) {
+                $deadline = (Get-Date).AddMinutes(15)
+                $ready = $false
+                while ((Get-Date) -lt $deadline) {
+                    try {
+                        $status = Get-AzVM -ResourceGroupName $vm.RG -Name $vm.Name -Status
+                        $agentOk = $status.VMAgent.Statuses | Where-Object { $_.Code -eq 'ProvisioningState/succeeded' }
+                        if ($agentOk) {
+                            Write-Host "  $($vm.Name) — agent ready" -ForegroundColor Green
+                            $ready = $true
+                            break
+                        }
+                    } catch { }
+                    Start-Sleep -Seconds 20
+                }
+                if (-not $ready) {
+                    Write-Warning "$($vm.Name) did not report ready within 15 minutes."
+                }
+            }
+
+            Write-Host "All VMs deployed." -ForegroundColor Green
         }
 
         3 {
             Write-Host "`n╔══════════════════════════════════════════╗" -ForegroundColor Green
-            Write-Host "║  PHASE 3: Primary Domain Controller      ║" -ForegroundColor Green
+            Write-Host "║  PHASE 3: Bastion Validation             ║" -ForegroundColor Green
             Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Green
 
-            if (-not $sasToken) {
-                Write-Host "Generating SAS token..." -ForegroundColor Yellow
-                $sasToken = Upload-ScriptsToStorage
+            $allVMs = @(
+                @{ RG = $config.RgEast; Name = 'DVDC01' }
+                @{ RG = $config.RgEast; Name = 'DVDC02' }
+                @{ RG = $config.RgEast; Name = 'DVAS01' }
+                @{ RG = $config.RgEast; Name = 'DVAS02' }
+                @{ RG = $config.RgWest; Name = 'DVDC03' }
+                @{ RG = $config.RgWest; Name = 'DVAS03' }
+                @{ RG = $config.RgWest; Name = 'DVAS04' }
+            )
+
+            $passed = 0
+            $failed = 0
+
+            foreach ($vm in $allVMs) {
+                Write-Host "  Testing $($vm.Name)..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $result = Invoke-AzVMRunCommand `
+                        -ResourceGroupName $vm.RG `
+                        -VMName $vm.Name `
+                        -CommandId 'RunPowerShellScript' `
+                        -ScriptString 'Write-Output "whoami: $(whoami)"; Write-Output "hostname: $(hostname)"'
+
+                    $output = ($result.Value | Where-Object { $_.Code -eq 'ComponentStatus/StdOut/succeeded' }).Message
+                    if ($output -match 'hostname:') {
+                        Write-Host " PASS — $($output.Trim())" -ForegroundColor Green
+                        $passed++
+                    } else {
+                        Write-Host " FAIL — unexpected output" -ForegroundColor Red
+                        $failed++
+                    }
+                }
+                catch {
+                    Write-Host " FAIL — $($_.Exception.Message)" -ForegroundColor Red
+                    $failed++
+                }
             }
 
-            Deploy-BicepPhase -PhaseName 'primarydc' -ExtraParams @{ scriptSasToken = $sasToken }
-            Wait-VMReboot -ResourceGroupName $config.RgEast -VMName 'DVDC01' -TimeoutMinutes 20
-
-            # Configure DNS forwarders on primary DC
-            Write-Host "Configuring DNS forwarders on DVDC01..." -ForegroundColor Yellow
-            Invoke-AzVMRunCommand -ResourceGroupName $config.RgEast -VMName 'DVDC01' `
-                -CommandId 'RunPowerShellScript' `
-                -ScriptPath (Join-Path $config.ScriptsPath 'Configure-DNS-Forwarders.ps1')
-        }
-
-        4 {
-            Write-Host "`n╔══════════════════════════════════════════╗" -ForegroundColor Green
-            Write-Host "║  PHASE 4: DNS Update + VNet Peering      ║" -ForegroundColor Green
-            Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Green
-
-            # Update East VNet DNS to Primary DC
-            Write-Host "Updating East VNet DNS to $($config.PrimaryDcIp)..." -ForegroundColor Yellow
-            $vnetEast = Get-AzVirtualNetwork -ResourceGroupName $config.RgEast -Name $config.VnetEast
-            $vnetEast.DhcpOptions.DnsServers = @($config.PrimaryDcIp)
-            $vnetEast | Set-AzVirtualNetwork | Out-Null
-
-            # Update Central VNet DNS to Primary DC (secondary will be added later)
-            Write-Host "Updating Central VNet DNS to $($config.PrimaryDcIp)..." -ForegroundColor Yellow
-            $vnetCentral = Get-AzVirtualNetwork -ResourceGroupName $config.RgCentral -Name $config.VnetCentral
-            $vnetCentral.DhcpOptions.DnsServers = @($config.PrimaryDcIp)
-            $vnetCentral | Set-AzVirtualNetwork | Out-Null
-
-            # Deploy peering
-            Deploy-BicepPhase -PhaseName 'dns-peering'
-
-            Write-Host "DNS updated and VNet peering established." -ForegroundColor Green
-        }
-
-        5 {
-            Write-Host "`n╔══════════════════════════════════════════╗" -ForegroundColor Green
-            Write-Host "║  PHASE 5: Secondary Domain Controller    ║" -ForegroundColor Green
-            Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Green
-
-            if (-not $sasToken) {
-                Write-Host "Generating SAS token..." -ForegroundColor Yellow
-                $sasToken = Upload-ScriptsToStorage
+            Write-Host "`nValidation complete: $passed passed, $failed failed out of $($allVMs.Count) VMs." -ForegroundColor Cyan
+            if ($failed -gt 0) {
+                Write-Warning "Some VMs failed validation. Check Bastion connectivity and VM agent status."
             }
-
-            Deploy-BicepPhase -PhaseName 'secondarydc' -ExtraParams @{ scriptSasToken = $sasToken }
-            Wait-VMReboot -ResourceGroupName $config.RgCentral -VMName 'DVDC02' -TimeoutMinutes 20
-
-            # Configure DNS forwarders on secondary DC
-            Write-Host "Configuring DNS forwarders on DVDC02..." -ForegroundColor Yellow
-            Invoke-AzVMRunCommand -ResourceGroupName $config.RgCentral -VMName 'DVDC02' `
-                -CommandId 'RunPowerShellScript' `
-                -ScriptPath (Join-Path $config.ScriptsPath 'Configure-DNS-Forwarders.ps1')
-
-            # Update both VNets to use both DCs for DNS
-            Write-Host "Updating VNet DNS to both DCs..." -ForegroundColor Yellow
-            $bothDns = @($config.PrimaryDcIp, $config.SecondaryDcIp)
-
-            $vnetEast = Get-AzVirtualNetwork -ResourceGroupName $config.RgEast -Name $config.VnetEast
-            $vnetEast.DhcpOptions.DnsServers = $bothDns
-            $vnetEast | Set-AzVirtualNetwork | Out-Null
-
-            $vnetCentral = Get-AzVirtualNetwork -ResourceGroupName $config.RgCentral -Name $config.VnetCentral
-            $vnetCentral.DhcpOptions.DnsServers = $bothDns
-            $vnetCentral | Set-AzVirtualNetwork | Out-Null
-
-            Write-Host "Secondary DC promoted and DNS updated." -ForegroundColor Green
-        }
-
-        6 {
-            Write-Host "`n╔══════════════════════════════════════════╗" -ForegroundColor Green
-            Write-Host "║  PHASE 6: App Servers (Domain Join)      ║" -ForegroundColor Green
-            Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Green
-
-            if (-not $sasToken) {
-                Write-Host "Generating SAS token..." -ForegroundColor Yellow
-                $sasToken = Upload-ScriptsToStorage
-            }
-
-            Deploy-BicepPhase -PhaseName 'appservers' -ExtraParams @{ scriptSasToken = $sasToken }
-
-            # Wait for both app servers to reboot after domain join
-            Wait-VMReboot -ResourceGroupName $config.RgEast -VMName 'DVAS01' -TimeoutMinutes 15
-            Wait-VMReboot -ResourceGroupName $config.RgCentral -VMName 'DVAS02' -TimeoutMinutes 15
-
-            Write-Host "App servers joined to domain and configured." -ForegroundColor Green
-        }
-
-        7 {
-            Write-Host "`n╔══════════════════════════════════════════╗" -ForegroundColor Green
-            Write-Host "║  PHASE 7: AD Configuration (OUs + Users) ║" -ForegroundColor Green
-            Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Green
-
-            # Create OU structure
-            Write-Host "Creating OU structure on DVDC01..." -ForegroundColor Yellow
-            Invoke-AzVMRunCommand -ResourceGroupName $config.RgEast -VMName 'DVDC01' `
-                -CommandId 'RunPowerShellScript' `
-                -ScriptString "& '$($config.ScriptsPath)\Configure-OUs.ps1' -DomainDN '$($config.DomainDN)'" `
-                -ErrorAction Stop
-
-            # Upload and import users
-            Write-Host "Importing AD users on DVDC01..." -ForegroundColor Yellow
-
-            # First, download CSV to DC
-            $csvContent = Get-Content -Path $config.CsvPath -Raw
-            $downloadScript = @"
-`$csvContent = @'
-$csvContent
-'@
-`$csvContent | Out-File -FilePath 'C:\Temp\users.csv' -Encoding UTF8
-New-Item -Path 'C:\Temp' -ItemType Directory -Force | Out-Null
-"@
-            Invoke-AzVMRunCommand -ResourceGroupName $config.RgEast -VMName 'DVDC01' `
-                -CommandId 'RunPowerShellScript' `
-                -ScriptString $downloadScript
-
-            # Then create users from CSV
-            $createUsersScript = @"
-New-Item -Path 'C:\Temp' -ItemType Directory -Force | Out-Null
-# CSV was uploaded in previous step
-Import-Module ActiveDirectory
-`$users = Import-Csv -Path 'C:\Temp\users.csv'
-`$created = 0
-foreach (`$user in `$users) {
-    `$existing = Get-ADUser -Filter "SamAccountName -eq '`$(`$user.SamAccountName)'" -ErrorAction SilentlyContinue
-    if (`$existing) { continue }
-    `$pwd = ConvertTo-SecureString `$user.Password -AsPlainText -Force
-    New-ADUser -Name `$user.DisplayName -GivenName `$user.FirstName -Surname `$user.LastName ``
-        -DisplayName `$user.DisplayName -SamAccountName `$user.SamAccountName ``
-        -UserPrincipalName `$user.UPN -Department `$user.Department -Title `$user.Role ``
-        -Path `$user.OUPath -AccountPassword `$pwd -Enabled `$true -ChangePasswordAtLogon `$false
-    `$created++
-}
-Write-Output "Created `$created users out of `$(`$users.Count) total."
-"@
-            Invoke-AzVMRunCommand -ResourceGroupName $config.RgEast -VMName 'DVDC01' `
-                -CommandId 'RunPowerShellScript' `
-                -ScriptString $createUsersScript
-
-            Write-Host "AD configuration complete." -ForegroundColor Green
         }
     }
 }
@@ -358,10 +287,9 @@ Write-Host "╚═════════════════════�
 Write-Host @"
 
 Verification steps:
-  1. RDP to DVDC01 via Bastion: Get-ADForest
-  2. Check replication: repadmin /replsummary
-  3. List computers: Get-ADComputer -Filter *
-  4. List users: Get-ADUser -Filter * -SearchBase "OU=ADLab,$($config.DomainDN)" | Measure-Object
-  5. Test IIS: Browse to DVAS01/DVAS02 private IPs
-  6. Test File Share: \\DVAS01\Department
+  1. az vm list -g rg-ADLab-East -o table    (4 VMs: DVDC01, DVDC02, DVAS01, DVAS02)
+  2. az vm list -g rg-ADLab-West -o table     (3 VMs: DVDC03, DVAS03, DVAS04)
+  3. az network bastion list -o table          (2 Bastions, Standard SKU)
+  4. No public IPs on VMs
+  5. Bastion tunnel -> RDP login to each VM with labadmin
 "@
