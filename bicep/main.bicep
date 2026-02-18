@@ -2,8 +2,8 @@ targetScope = 'subscription'
 
 // ─── Parameters ─────────────────────────────────────────────────────────────
 
-@description('Deployment phase: infra or vms')
-@allowed(['infra', 'vms'])
+@description('Deployment phase: infra, vms, primarydc, domainjoin, or groups')
+@allowed(['infra', 'vms', 'primarydc', 'domainjoin', 'groups'])
 param deployPhase string
 
 @description('Admin username for all VMs')
@@ -42,6 +42,12 @@ var rgNameWest = 'rg-ADLab-West'
 
 var eastVnetName = 'vnet-adlab-east'
 var westVnetName = 'vnet-adlab-west'
+
+// Domain configuration
+var domainName = 'managed-connections.net'
+var netbiosName = 'MANAGED'
+var domainDN = 'DC=${replace(domainName, '.', ',DC=')}'
+var scriptBaseUrl = 'https://${storageAccountName}.blob.core.windows.net/scripts'
 
 // ─── Resource Groups ────────────────────────────────────────────────────────
 
@@ -470,6 +476,119 @@ module vmDvas04 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
     privateIpAddress: '10.3.2.5'
     createPublicIp: false
     nsgId: nsgWestAppExisting.id
+    tags: tags
+  }
+}
+
+// ─── Phase: primarydc ──────────────────────────────────────────────────────
+
+// Existing DVDC01 VM for CSE attachment
+resource vmDvdc01Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'primarydc') {
+  scope: rgEastExisting
+  name: 'DVDC01'
+}
+
+module cseDvdc01Promote 'modules/compute/vm-extension.bicep' = if (deployPhase == 'primarydc') {
+  scope: rgEastExisting
+  name: 'cse-dvdc01-promote'
+  params: {
+    vmName: vmDvdc01Existing.name
+    location: eastRegion
+    scriptUri: '${scriptBaseUrl}/Promote-PrimaryDC.ps1?${scriptSasToken}'
+    commandToExecute: 'powershell -ExecutionPolicy Bypass -File Promote-PrimaryDC.ps1 -DomainName "${domainName}" -NetBIOSName "${netbiosName}" -SafeModePassword "${safeModePassword}"'
+    tags: tags
+  }
+}
+
+// ─── Phase: domainjoin ───────────────────────────────────────────────────────
+
+// ── East member servers ──
+
+resource vmDvas01Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'domainjoin') {
+  scope: rgEastExisting
+  name: 'DVAS01'
+}
+
+resource vmDvas02Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'domainjoin') {
+  scope: rgEastExisting
+  name: 'DVAS02'
+}
+
+module cseDvas01Join 'modules/compute/vm-extension.bicep' = if (deployPhase == 'domainjoin') {
+  scope: rgEastExisting
+  name: 'cse-dvas01-join'
+  params: {
+    vmName: vmDvas01Existing.name
+    location: eastRegion
+    scriptUri: '${scriptBaseUrl}/Join-DomainAndConfigure.ps1${scriptSasToken}'
+    commandToExecute: 'powershell -ExecutionPolicy Bypass -File Join-DomainAndConfigure.ps1 -DomainName "${domainName}" -DcIpAddress "10.1.1.4" -DomainAdminUser "${adminUsername}" -DomainAdminPassword "${adminPassword}"'
+    tags: tags
+  }
+}
+
+module cseDvas02Join 'modules/compute/vm-extension.bicep' = if (deployPhase == 'domainjoin') {
+  scope: rgEastExisting
+  name: 'cse-dvas02-join'
+  params: {
+    vmName: vmDvas02Existing.name
+    location: eastRegion
+    scriptUri: '${scriptBaseUrl}/Join-DomainAndConfigure.ps1${scriptSasToken}'
+    commandToExecute: 'powershell -ExecutionPolicy Bypass -File Join-DomainAndConfigure.ps1 -DomainName "${domainName}" -DcIpAddress "10.1.1.4" -DomainAdminUser "${adminUsername}" -DomainAdminPassword "${adminPassword}"'
+    tags: tags
+  }
+}
+
+// ── West member servers ──
+
+resource vmDvas03Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'domainjoin') {
+  scope: rgWestExisting
+  name: 'DVAS03'
+}
+
+resource vmDvas04Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'domainjoin') {
+  scope: rgWestExisting
+  name: 'DVAS04'
+}
+
+module cseDvas03Join 'modules/compute/vm-extension.bicep' = if (deployPhase == 'domainjoin') {
+  scope: rgWestExisting
+  name: 'cse-dvas03-join'
+  params: {
+    vmName: vmDvas03Existing.name
+    location: westRegion
+    scriptUri: '${scriptBaseUrl}/Join-DomainAndConfigure.ps1${scriptSasToken}'
+    commandToExecute: 'powershell -ExecutionPolicy Bypass -File Join-DomainAndConfigure.ps1 -DomainName "${domainName}" -DcIpAddress "10.1.1.4" -DomainAdminUser "${adminUsername}" -DomainAdminPassword "${adminPassword}"'
+    tags: tags
+  }
+}
+
+module cseDvas04Join 'modules/compute/vm-extension.bicep' = if (deployPhase == 'domainjoin') {
+  scope: rgWestExisting
+  name: 'cse-dvas04-join'
+  params: {
+    vmName: vmDvas04Existing.name
+    location: westRegion
+    scriptUri: '${scriptBaseUrl}/Join-DomainAndConfigure.ps1${scriptSasToken}'
+    commandToExecute: 'powershell -ExecutionPolicy Bypass -File Join-DomainAndConfigure.ps1 -DomainName "${domainName}" -DcIpAddress "10.1.1.4" -DomainAdminUser "${adminUsername}" -DomainAdminPassword "${adminPassword}"'
+    tags: tags
+  }
+}
+
+// ─── Phase: groups ───────────────────────────────────────────────────────────
+
+resource vmDvdc01Groups 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'groups') {
+  scope: rgEastExisting
+  name: 'DVDC01'
+}
+
+module cseDvdc01Groups 'modules/compute/vm-extension.bicep' = if (deployPhase == 'groups') {
+  scope: rgEastExisting
+  name: 'cse-dvdc01-groups'
+  params: {
+    vmName: vmDvdc01Groups.name
+    location: eastRegion
+    scriptUri: '${scriptBaseUrl}/Create-DepartmentGroups.ps1${scriptSasToken}'
+    commandToExecute: 'powershell -ExecutionPolicy Bypass -File Create-DepartmentGroups.ps1 -DomainDN "${domainDN}"'
     tags: tags
   }
 }
