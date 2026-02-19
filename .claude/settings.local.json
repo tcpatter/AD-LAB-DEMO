@@ -67,7 +67,10 @@
       "Bash(pwsh -NoProfile -File \"/c/Users/TerryPatterson/OneDrive - Managed Connections, LTD/Documents/source/repos/AD-Lab/scripts/run-join-servers.ps1\")",
       "Bash(powershell.exe -ExecutionPolicy Bypass -File deploy/deploy.ps1 -Phase 6 -AdminPassword 'L@bAdmin2026!x' -SafeModePassword 'L@bAdmin2026!x')",
       "Bash(powershell.exe -NoProfile -Command \"$errors = $null; $null = [System.Management.Automation.Language.Parser]::ParseFile\\(''deploy/deploy.ps1'', [ref]$null, [ref]$errors\\); $errors | Select-Object Message, Extent | Format-List\")",
-      "Bash(powershell.exe -NoProfile:*)"
+      "Bash(powershell.exe -NoProfile:*)",
+      "Bash(pwsh -File:*)",
+      "Bash(az vm list:*)",
+      "Bash(pwsh -Command \".\\\\deploy\\\\Invoke-Failback.ps1 -AdminPassword ''L@bAdmin2026!x''\")"
     ]
   }
 }
