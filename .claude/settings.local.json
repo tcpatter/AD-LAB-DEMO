@@ -70,7 +70,8 @@
       "Bash(powershell.exe -NoProfile:*)",
       "Bash(pwsh -File:*)",
       "Bash(az vm list:*)",
-      "Bash(pwsh -Command \".\\\\deploy\\\\Invoke-Failback.ps1 -AdminPassword ''L@bAdmin2026!x''\")"
+      "Bash(pwsh -Command \".\\\\deploy\\\\Invoke-Failback.ps1 -AdminPassword ''L@bAdmin2026!x''\")",
+      "mcp__claude_ai_Learn_MCP__microsoft_docs_fetch"
     ]
   }
 }
