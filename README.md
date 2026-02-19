@@ -120,12 +120,40 @@ Bastion connects using "Password from Azure Key Vault" authentication, pulling c
 - Passwords set via `az vm user update` (VMAccessAgent) to avoid shell-escaping issues with special characters
 - No credentials stored in code or deployment parameters
 
+## Disaster Recovery
+
+The lab includes a full unplanned DR failover exercise: East US 2 → Central US, with graceful failback.
+
+### DR Topology
+
+```
+East US 2 (PRIMARY)          Central US (DR)
+DVDC01  10.1.1.4  ←FSMO      DVDC03  10.3.1.4  ← DR target
+DVDC02  10.1.1.5              (bidirectional VNet peering)
+```
+
+DVDC03 is a fully promoted replica DC. In a simulated East outage, all 5 FSMO roles are **seized** onto
+DVDC03. During failback, roles are **transferred** (not seized) back to DVDC01 once replication is healthy.
+
+See [docs/DR-Runbook.md](docs/DR-Runbook.md) for the full runbook including pre-flight checklist,
+expected output, post-validation steps, and troubleshooting.
+
+### Quick Start
+
+```powershell
+# Failover: East → West (~20 min) — simulates East US 2 outage
+.\deploy\Invoke-Failover.ps1 -AdminPassword 'L@bAdmin2026!x'
+
+# Failback: West → East (~25 min) — restores East as primary
+.\deploy\Invoke-Failback.ps1 -AdminPassword 'L@bAdmin2026!x'
+```
+
 ## Project Structure
 
 ```
 AD-Lab/
 ├── bicep/
-│   ├── main.bicep              # Orchestrator — phased deployment (infra, vms)
+│   ├── main.bicep              # Orchestrator — phased deployment (infra, vms, primarydc)
 │   ├── main.bicepparam         # Parameter file
 │   ├── main.json               # Compiled ARM template
 │   └── modules/
@@ -136,20 +164,27 @@ AD-Lab/
 │       │   ├── bastion.bicep    # Bastion host (Standard SKU + tunneling)
 │       │   ├── nsg.bicep        # Generic NSG with configurable rules
 │       │   ├── nsg-bastion.bicep # Bastion-specific NSG (Azure required rules)
-│       │   ├── peering.bicep    # VNet peering (for future cross-region)
+│       │   ├── peering.bicep    # VNet peering (bidirectional East ↔ West)
 │       │   └── vnet.bicep       # VNet with subnets
 │       └── storage/
 │           └── storageaccount.bicep  # Storage for deployment scripts
 ├── deploy/
-│   └── deploy.ps1              # 3-phase PowerShell orchestrator (az cli)
+│   ├── deploy.ps1              # 6-phase PowerShell orchestrator (az cli)
+│   ├── Invoke-Failover.ps1     # DR failover: East US 2 → Central US
+│   └── Invoke-Failback.ps1     # DR failback: Central US → East US 2
+├── docs/
+│   └── DR-Runbook.md           # Full DR runbook with troubleshooting guide
 └── scripts/
-    ├── powershell/              # DC promotion, domain join, DNS, OU scripts
+    ├── powershell/              # DC promotion, domain join, DNS, OU, DR scripts
     │   ├── Promote-PrimaryDC.ps1
     │   ├── Promote-SecondaryDC.ps1
     │   ├── Join-DomainAndConfigure.ps1
     │   ├── Configure-DNS-Forwarders.ps1
     │   ├── Configure-OUs.ps1
-    │   └── Create-ADUsers.ps1
+    │   ├── Create-ADUsers.ps1
+    │   ├── Create-DepartmentGroups.ps1
+    │   ├── Seize-FSMORoles.ps1  # FSMO seizure for unplanned failover (runs on DVDC03)
+    │   └── Transfer-FSMORoles.ps1  # FSMO transfer for graceful failback (runs on DVDC01)
     └── python/                  # User generation (Faker-based CSV)
         └── data/users.csv
 ```
@@ -207,12 +242,17 @@ az network bastion list -o table         # 2 Bastions (Standard SKU)
 
 ## Future Phases
 
-The following phases will be added to the deployment orchestrator:
+The following phases are planned for future work:
 
-1. **Primary DC Promotion** — DVDC01 as forest root (managed-connections.net)
-2. **DNS + VNet Peering** — Update VNet DNS to DC IPs, bidirectional peering East <-> West
-3. **Secondary DC Promotion** — DVDC02 (East) + DVDC03 (West) join domain as replica DCs
-4. **App Server Domain Join** — DVAS01-04 join domain, install IIS + File Server roles
-5. **AD Configuration** — OU structure, 100 test users across 6 departments
-6. **Entra Sync** — Microsoft Entra Connect / Cloud Sync to Entra ID
-7. **Global Secure Access** — GSA agent deployment and policy testing
+1. **Entra Sync** — Microsoft Entra Connect / Cloud Sync to Entra ID
+2. **Global Secure Access** — GSA agent deployment and policy testing
+
+**Completed phases** (Phases 1–6 of `deploy.ps1` plus DR exercise):
+- Infrastructure (RGs, VNets, NSGs, Bastion, Storage)
+- Virtual Machines (7 VMs, Standard_B2s, Windows Server 2022)
+- Primary DC Promotion (DVDC01 as forest root `managed-connections.net`)
+- DNS + VNet Peering (bidirectional East ↔ West, Azure DNS forwarder)
+- Secondary DC Promotions (DVDC02 East, DVDC03 West as replica DCs)
+- App Server Domain Join (DVAS01–04 joined, IIS + File Server roles)
+- AD Configuration (OU structure, 100 test users, 18 department security groups)
+- DR Failover / Failback exercise (FSMO seize/transfer, VNet DNS redirect)
