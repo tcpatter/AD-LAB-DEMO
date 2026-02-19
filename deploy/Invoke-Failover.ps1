@@ -199,15 +199,22 @@ Write-Host "  East region simulated as offline." -ForegroundColor Green
 
 Write-Host "`n── Step 3: Seizing FSMO roles on DVDC03 ──" -ForegroundColor Yellow
 
-$seizeScript = Join-Path $config.ScriptsPath 'Seize-FSMORoles.ps1'
-if (-not (Test-Path $seizeScript)) {
-    throw "Seize-FSMORoles.ps1 not found at: $seizeScript"
-}
-$seizeContent = Get-Content $seizeScript -Raw
-
-# Wrap in scriptblock so the param() block receives the named argument
-# (avoids az CLI quoting issues with special characters in --parameters)
-$seizeRunner = "& {`n$seizeContent`n} -TargetDC 'DVDC03'"
+# Inline the seizure logic — avoids scriptblock-wrapper parsing issues that occur
+# when embedding file content with non-ASCII characters via run-command.
+$seizeRunner = @'
+New-Item -Path C:\Logs -ItemType Directory -Force | Out-Null
+Start-Transcript -Path C:\Logs\Seize-FSMORoles.log -Append
+Write-Output "Seizing all 5 FSMO roles onto DVDC03"
+Import-Module ActiveDirectory -ErrorAction Stop
+Move-ADDirectoryServerOperationMasterRole `
+    -Identity 'DVDC03' `
+    -OperationMasterRole SchemaMaster,DomainNamingMaster,PDCEmulator,RIDMaster,InfrastructureMaster `
+    -Force `
+    -Confirm:$false
+Write-Output "Seizure complete. Current FSMO holders:"
+netdom query fsmo
+Stop-Transcript
+'@
 
 try {
     $result = Invoke-RunCommand -ResourceGroup $config.RgWest -VMName 'DVDC03' -ScriptContent $seizeRunner
@@ -297,7 +304,7 @@ try {
 
         $checks = @{
             '[PASS] dcdiag Advertising'  = 'passed test Advertising'
-            '[PASS] dcdiag FsmoCheck'    = 'passed test FsmoCheck'
+            '[PASS] dcdiag FsmoCheck'    = 'passed test\s+FsmoCheck'
             '[PASS] SYSVOL share'        = 'SYSVOL'
             '[PASS] NETLOGON share'      = 'NETLOGON'
         }

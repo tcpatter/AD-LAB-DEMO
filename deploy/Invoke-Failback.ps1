@@ -183,15 +183,21 @@ try {
 
 Write-Host "`n── Step 3: Transferring FSMO roles to DVDC01 (graceful) ──" -ForegroundColor Yellow
 
-$transferScript = Join-Path $config.ScriptsPath 'Transfer-FSMORoles.ps1'
-if (-not (Test-Path $transferScript)) {
-    throw "Transfer-FSMORoles.ps1 not found at: $transferScript"
-}
-$transferContent = Get-Content $transferScript -Raw
-
-# Wrap in scriptblock so the param() block receives the named argument
-# (avoids az CLI quoting issues with special characters in --parameters)
-$transferRunner = "& {`n$transferContent`n} -TargetDC 'DVDC01'"
+# Inline the transfer logic — avoids scriptblock-wrapper parsing issues that occur
+# when embedding file content with non-ASCII characters via run-command.
+$transferRunner = @'
+New-Item -Path C:\Logs -ItemType Directory -Force | Out-Null
+Start-Transcript -Path C:\Logs\Transfer-FSMORoles.log -Append
+Write-Output "Transferring all 5 FSMO roles to DVDC01 (graceful)"
+Import-Module ActiveDirectory -ErrorAction Stop
+Move-ADDirectoryServerOperationMasterRole `
+    -Identity 'DVDC01' `
+    -OperationMasterRole SchemaMaster,DomainNamingMaster,PDCEmulator,RIDMaster,InfrastructureMaster `
+    -Confirm:$false
+Write-Output "Transfer complete. Current FSMO holders:"
+netdom query fsmo
+Stop-Transcript
+'@
 
 try {
     $result = Invoke-RunCommand -ResourceGroup $config.RgEast -VMName 'DVDC01' -ScriptContent $transferRunner
