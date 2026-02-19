@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     6-phase deployment orchestrator for the AD Lab environment.
 .DESCRIPTION
@@ -255,7 +255,7 @@ foreach ($p in $phases) {
                     }
 
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Host " FAIL — az vm run-command returned exit code $LASTEXITCODE" -ForegroundColor Red
+                        Write-Host " FAIL - az vm run-command returned exit code $LASTEXITCODE" -ForegroundColor Red
                         $failed++
                         continue
                     }
@@ -544,15 +544,35 @@ try {
             Write-Host "║  PHASE 6: Department Security Groups     ║" -ForegroundColor Green
             Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Green
 
-            # Ensure scripts are uploaded and SAS token is available
-            if (-not $sasToken) {
-                Write-Host "`nUploading scripts to storage and generating SAS token..." -ForegroundColor Yellow
-                $sasToken = Upload-ScriptsToStorage
-            }
-
-            # Deploy CSE to DVDC01 — creates 18 groups and populates from OUs
+            # Wrap script content in a scriptblock call with DomainDN hardcoded
+            # (avoids --parameters quoting issues with '=' and ',' in the DomainDN value)
             Write-Host "`n── Running Create-DepartmentGroups.ps1 on DVDC01 ──" -ForegroundColor Yellow
-            Deploy-BicepPhase -PhaseName 'groups' -ExtraParams @{ scriptSasToken = $sasToken }
+            $createGroupsScript = Join-Path $config.ScriptsPath 'Create-DepartmentGroups.ps1'
+            $scriptContent = Get-Content $createGroupsScript -Raw
+
+            $tempGroupsRunner = Join-Path $env:TEMP 'run-groups-remote.ps1'
+            # Invoke as a scriptblock so the param() block receives the named argument
+            "& {`n$scriptContent`n} -DomainDN '$($config.DomainDN)'" |
+                Set-Content -Path $tempGroupsRunner -Encoding UTF8
+
+            $groupResult = az vm run-command invoke `
+                --resource-group $config.RgEast `
+                --name 'DVDC01' `
+                --command-id RunPowerShellScript `
+                --scripts "@$tempGroupsRunner" `
+                -o json 2>&1
+
+            Remove-Item $tempGroupsRunner -Force -ErrorAction SilentlyContinue
+
+            if ($LASTEXITCODE -ne 0) {
+                throw "Create-DepartmentGroups.ps1 failed on DVDC01. Exit code: $LASTEXITCODE"
+            } else {
+                $parsed = $groupResult | ConvertFrom-Json
+                $stdout = ($parsed.value | Where-Object { $_.code -eq 'ComponentStatus/StdOut/succeeded' }).message
+                $stderr = ($parsed.value | Where-Object { $_.code -eq 'ComponentStatus/StdErr/succeeded' }).message
+                if ($stdout) { Write-Host $stdout -ForegroundColor Cyan }
+                if ($stderr) { Write-Host "StdErr: $stderr" -ForegroundColor Yellow }
+            }
 
             # Validate: check that all 18 groups exist and have >= 1 member
             Write-Host "`n── Validating group count and membership on DVDC01 ──" -ForegroundColor Yellow
