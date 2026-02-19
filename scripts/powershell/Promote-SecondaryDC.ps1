@@ -31,7 +31,7 @@ try {
     Write-Output "Promoting server as additional Domain Controller for $DomainName..."
     $securePassword = ConvertTo-SecureString $SafeModePassword -AsPlainText -Force
     $domainCred = New-Object System.Management.Automation.PSCredential(
-        "$DomainName\$DomainAdminUser",
+        "MANAGED\$DomainAdminUser",
         (ConvertTo-SecureString $DomainAdminPassword -AsPlainText -Force)
     )
 
