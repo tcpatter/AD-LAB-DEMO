@@ -71,7 +71,12 @@
       "Bash(pwsh -File:*)",
       "Bash(az vm list:*)",
       "Bash(pwsh -Command \".\\\\deploy\\\\Invoke-Failback.ps1 -AdminPassword ''L@bAdmin2026!x''\")",
-      "mcp__claude_ai_Learn_MCP__microsoft_docs_fetch"
+      "mcp__claude_ai_Learn_MCP__microsoft_docs_fetch",
+      "Bash(pwsh -Command \".\\\\deploy\\\\Deploy-CloudSyncAgent.ps1\")",
+      "Bash(az vm restart:*)",
+      "Bash(az vm get-instance-view:*)",
+      "Bash(/tmp/install-webview2.ps1:*)",
+      "Bash(az rest:*)"
     ]
   }
 }

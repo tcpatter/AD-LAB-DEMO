@@ -211,7 +211,7 @@ $url = 'PLACEHOLDER_SAS_URL'
 Write-Output "Downloading Cloud Sync agent installer..."
 Invoke-WebRequest -Uri $url -OutFile 'C:\Temp\AADConnectProvisioningAgentSetup.exe' -UseBasicParsing
 $sizeMb = [math]::Round((Get-Item 'C:\Temp\AADConnectProvisioningAgentSetup.exe').Length / 1MB, 1)
-Write-Output "Download complete — ${sizeMb} MB saved to C:\Temp\AADConnectProvisioningAgentSetup.exe"
+Write-Output "Download complete - ${sizeMb} MB saved to C:\Temp\AADConnectProvisioningAgentSetup.exe"
 '@ -replace 'PLACEHOLDER_SAS_URL', $sasUrl
 
 try {

@@ -9,7 +9,7 @@
       - TLS 1.2          (enables via registry if not set; reboot required after)
       - Execution policy (sets to RemoteSigned if Undefined)
       - VaultSvc         (Windows Credential Manager must not be Disabled)
-      - KDS Root Key     (creates one if absent — required for gMSA auto-creation)
+      - KDS Root Key     (creates one if absent  - required for gMSA auto-creation)
       - AD schema        (msDS-ExternalDirectoryObjectId must be present)
       - Outbound HTTPS   (tests connectivity to key Entra endpoints on port 443)
 
@@ -32,7 +32,7 @@ function Write-Check {
         [string]$Detail = ''
     )
     $tag    = if ($Ok) { '[PASS]' } else { '[FAIL]' }
-    $suffix = if ($Detail) { " — $Detail" } else { '' }
+    $suffix = if ($Detail) { "  - $Detail" } else { '' }
     Write-Output "  $tag $Label$suffix"
 }
 
@@ -48,17 +48,17 @@ $caption = $os.Caption
 
 if ($build -ge 26100) {
     Write-Output "  [WARN] Windows Server 2025 detected (Build $build)."
-    Write-Output "         Known Cloud Sync sync issue — ensure KB5070773 (Oct 2025) is installed."
+    Write-Output "         Known Cloud Sync sync issue  - ensure KB5070773 (Oct 2025) is installed."
     Write-Output "         Support for WS2025 is planned for a future Cloud Sync release."
 } elseif ($build -ge 20348) {
-    Write-Check "OS Version" $true "$caption (Build $build — Windows Server 2022)"
+    Write-Check "OS Version" $true "$caption (Build $build  - Windows Server 2022)"
 } elseif ($build -ge 17763) {
-    Write-Check "OS Version" $true "$caption (Build $build — Windows Server 2019)"
+    Write-Check "OS Version" $true "$caption (Build $build  - Windows Server 2019)"
 } elseif ($build -ge 14393) {
-    Write-Output "  [WARN] Windows Server 2016 detected (Build $build) — in extended support."
+    Write-Output "  [WARN] Windows Server 2016 detected (Build $build)  - in extended support."
     Write-Output "         Consider upgrading to Windows Server 2019 or 2022."
 } else {
-    Write-Check "OS Version" $false "$caption (Build $build) — unsupported"
+    Write-Check "OS Version" $false "$caption (Build $build)  - unsupported"
     $pass = $false
 }
 
@@ -94,7 +94,7 @@ $netFxProps = Get-ItemProperty -Path $netFxPath -ErrorAction SilentlyContinue
 if ($netFxProps.SchUseStrongCrypto -ne 1) { $needsTls = $true }
 
 if ($needsTls) {
-    Write-Output "  [INFO] TLS 1.2 not fully configured — applying registry keys..."
+    Write-Output "  [INFO] TLS 1.2 not fully configured  - applying registry keys..."
     foreach ($path in @($tlsClientPath, $tlsServerPath)) {
         New-Item -Path $path -Force | Out-Null
         Set-ItemProperty -Path $path -Name 'Enabled'          -Value 1 -Type DWord
@@ -102,7 +102,7 @@ if ($needsTls) {
     }
     New-Item -Path $netFxPath -Force | Out-Null
     Set-ItemProperty -Path $netFxPath -Name 'SchUseStrongCrypto' -Value 1 -Type DWord
-    Write-Check "TLS 1.2" $true "Registry keys applied — server reboot required before installing agent"
+    Write-Check "TLS 1.2" $true "Registry keys applied  - server reboot required before installing agent"
     Write-Output "  [WARN] Reboot this server before running the Cloud Sync agent installer."
 } else {
     Write-Check "TLS 1.2" $true "Already configured"
@@ -117,7 +117,7 @@ if ($policy -in @('RemoteSigned', 'Unrestricted', 'Bypass')) {
     Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
     Write-Check "Execution Policy" $true "Set to RemoteSigned (was Undefined)"
 } else {
-    Write-Check "Execution Policy" $false "$policy — must be RemoteSigned or less restrictive"
+    Write-Check "Execution Policy" $false "$policy  - must be RemoteSigned or less restrictive"
     $pass = $false
 }
 
@@ -128,7 +128,7 @@ if ($null -eq $vault) {
     Write-Check "VaultSvc" $false "Service not found on this server"
     $pass = $false
 } elseif ($vault.StartType -eq 'Disabled') {
-    Write-Check "VaultSvc" $false "Service is Disabled — the Cloud Sync installer requires VaultSvc"
+    Write-Check "VaultSvc" $false "Service is Disabled  - the Cloud Sync installer requires VaultSvc"
     $pass = $false
 } else {
     Write-Check "VaultSvc" $true "StartType=$($vault.StartType), Status=$($vault.Status)"
@@ -142,7 +142,7 @@ try {
     if ($kdsKey) {
         Write-Check "KDS Root Key" $true "Key ID: $($kdsKey.KeyId)"
     } else {
-        Write-Output "  [INFO] No KDS Root Key found — creating one (backdated for immediate lab use)..."
+        Write-Output "  [INFO] No KDS Root Key found  - creating one (backdated for immediate lab use)..."
         Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10)) | Out-Null
         Write-Check "KDS Root Key" $true "Created and effective immediately"
     }
@@ -160,7 +160,7 @@ try {
     if ($attr) {
         Write-Check "msDS-ExternalDirectoryObjectId" $true "Present in schema ($schemaNc)"
     } else {
-        Write-Check "msDS-ExternalDirectoryObjectId" $false "Not found — schema may be pre-2016. Run adprep /forestprep."
+        Write-Check "msDS-ExternalDirectoryObjectId" $false "Not found  - schema may be pre-2016. Run adprep /forestprep."
         $pass = $false
     }
 } catch {
@@ -182,16 +182,16 @@ foreach ($endpoint in $endpoints) {
         Write-Check "HTTPS → $endpoint" $result.TcpTestSucceeded
         if (-not $result.TcpTestSucceeded) { $pass = $false }
     } catch {
-        Write-Output "  [WARN] Could not test $endpoint — $($_.Exception.Message)"
+        Write-Output "  [WARN] Could not test $endpoint  - $($_.Exception.Message)"
     }
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 Write-Output "`n=== Summary ==="
 if ($pass) {
-    Write-Output "  ALL CHECKS PASSED — $env:COMPUTERNAME is ready for Cloud Sync agent installation."
+    Write-Output "  ALL CHECKS PASSED  - $env:COMPUTERNAME is ready for Cloud Sync agent installation."
 } else {
-    Write-Output "  ONE OR MORE CHECKS FAILED — resolve issues above before installing the Cloud Sync agent."
+    Write-Output "  ONE OR MORE CHECKS FAILED  - resolve issues above before installing the Cloud Sync agent."
 }
 
 Stop-Transcript
