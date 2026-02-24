@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Graceful failback orchestrator: Central US → East US 2.
 .DESCRIPTION
@@ -61,7 +61,7 @@ function Wait-VMAgentReady {
             -o tsv 2>$null
 
         if ($status -eq 'Ready') {
-            Write-Host "  $VMName — agent ready" -ForegroundColor Green
+            Write-Host "  $VMName - agent ready" -ForegroundColor Green
             return $true
         }
         Start-Sleep -Seconds 20
@@ -104,12 +104,136 @@ function Invoke-RunCommand {
     }
 }
 
+# ─── Helper: Test Cloud Sync agent health ────────────────────────────────────
+
+function Test-CloudSyncAgentHealth {
+    param(
+        [string]$ResourceGroup,
+        [string]$VMName
+    )
+
+    Write-Host "  Checking Cloud Sync agent on $VMName..." -ForegroundColor Gray
+
+    $healthScript = @'
+# 1. Service state
+$svc = Get-Service -Name 'AADConnectProvisioningAgent' -ErrorAction SilentlyContinue
+Write-Output "CLOUDSYNC_SERVICE: $(if ($svc) { $svc.Status } else { 'NOT_FOUND' })"
+
+# 2. Registry registration (TenantId key = agent registered)
+$regPath = 'HKLM:\SOFTWARE\Microsoft\Azure AD Connect Provisioning Agent'
+if (Test-Path $regPath) {
+    $tenantId = (Get-ItemProperty $regPath -ErrorAction SilentlyContinue).TenantId
+    Write-Output "CLOUDSYNC_REGISTERED: $(if ($tenantId) { 'YES' } else { 'NO_TENANT_ID' })"
+} else {
+    Write-Output "CLOUDSYNC_REGISTERED: REG_PATH_MISSING"
+}
+
+# 3. Event log — last 2 hours
+$logName = 'Microsoft-AAD-Connect-ProvisioningAgent/Admin'
+try {
+    $events = Get-WinEvent -LogName $logName -MaxEvents 50 -ErrorAction Stop |
+              Where-Object { $_.TimeCreated -gt (Get-Date).AddHours(-2) }
+    $errCnt  = ($events | Where-Object { $_.Level -le 2 }).Count
+    $last    = $events | Select-Object -First 1
+    Write-Output "CLOUDSYNC_LAST_EVENT: $(if ($last) { $last.TimeCreated.ToString('HH:mm:ss') + ' ID=' + $last.Id } else { 'NONE_IN_2H' })"
+    Write-Output "CLOUDSYNC_ERRORS_2H: $errCnt"
+} catch {
+    Write-Output "CLOUDSYNC_EVENTLOG: CANNOT_READ"
+}
+
+# 4. Outbound HTTPS connectivity
+foreach ($ep in @('login.microsoftonline.com','management.azure.com',
+                   'login.windows.net','aadcdn.msftauthimages.net')) {
+    $ok = (Test-NetConnection -ComputerName $ep -Port 443 -WarningAction SilentlyContinue).TcpTestSucceeded
+    Write-Output "CLOUDSYNC_CONN_${ep}: $ok"
+}
+'@
+
+    try {
+        $result = Invoke-RunCommand -ResourceGroup $ResourceGroup -VMName $VMName -ScriptContent $healthScript
+        $out = if ($result.Stdout) { $result.Stdout } else { '' }
+        $allOk = $true
+
+        # Service state
+        if ($out -match 'CLOUDSYNC_SERVICE:\s*(\S+)') {
+            $svcState = $Matches[1]
+            if ($svcState -eq 'Running') {
+                Write-Host "    Service:     Running" -ForegroundColor Green
+            } else {
+                Write-Host "    Service:     $svcState" -ForegroundColor Red
+                $allOk = $false
+            }
+        }
+
+        # Registration
+        if ($out -match 'CLOUDSYNC_REGISTERED:\s*(\S+)') {
+            $reg = $Matches[1]
+            if ($reg -eq 'YES') {
+                Write-Host "    Registered:  YES" -ForegroundColor Green
+            } else {
+                Write-Host "    Registered:  $reg" -ForegroundColor Yellow
+                $allOk = $false
+            }
+        }
+
+        # Event log
+        if ($out -match 'CLOUDSYNC_EVENTLOG:\s*CANNOT_READ') {
+            Write-Host "    Event log:   CANNOT_READ (log name may differ - run Get-WinEvent -ListLog *Provisioning* via Bastion)" -ForegroundColor Yellow
+        } else {
+            if ($out -match 'CLOUDSYNC_LAST_EVENT:\s*(.+)') {
+                Write-Host "    Last event:  $($Matches[1].Trim())" -ForegroundColor Gray
+            }
+            if ($out -match 'CLOUDSYNC_ERRORS_2H:\s*(\d+)') {
+                $errCnt2h = [int]$Matches[1]
+                if ($errCnt2h -eq 0) {
+                    Write-Host "    Errors (2h): 0" -ForegroundColor Green
+                } else {
+                    Write-Host "    Errors (2h): $errCnt2h" -ForegroundColor Yellow
+                    $allOk = $false
+                }
+            }
+        }
+
+        # Connectivity
+        $connEndpoints = @('login.microsoftonline.com','management.azure.com','login.windows.net','aadcdn.msftauthimages.net')
+        foreach ($ep in $connEndpoints) {
+            $escapedEp = [regex]::Escape($ep)
+            if ($out -match "CLOUDSYNC_CONN_${escapedEp}:\s*(\S+)") {
+                $connOk = $Matches[1]
+                if ($connOk -eq 'True') {
+                    Write-Host "    Conn ${ep}: OK" -ForegroundColor Green
+                } else {
+                    Write-Host "    Conn ${ep}: FAILED" -ForegroundColor Red
+                    $allOk = $false
+                }
+            }
+        }
+
+        return $allOk
+    } catch {
+        Write-Warning "  Cloud Sync health check failed on ${VMName}: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # ─── Banner ───────────────────────────────────────────────────────────────────
 
 Write-Host "`n╔══════════════════════════════════════════╗" -ForegroundColor Magenta
 Write-Host "║  DR FAILBACK: Central US → East US 2    ║" -ForegroundColor Magenta
 Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Magenta
 Write-Host "`nStarted: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
+
+# ─── Step 0.5: Cloud Sync pre-failback baseline on DVDC03 ────────────────────
+
+Write-Host "`n── Step 0.5: Cloud Sync pre-failback baseline on DVDC03 ──" -ForegroundColor Yellow
+Write-Host "  Verifying DVDC03 sync agent is still Running (it was sole agent post-failover)..." -ForegroundColor Gray
+
+$dc03BaseOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgWest -VMName 'DVDC03'
+if (-not $dc03BaseOk) {
+    Write-Warning "  DVDC03 Cloud Sync agent is not fully healthy."
+    Write-Warning "  Remediation: Connect via Bastion - DVDC03 and run: Start-Service AADConnectProvisioningAgent"
+    Write-Warning "  Proceeding with failback — sync continuity may have a gap."
+}
 
 # ─── Step 1: Start East VMs ───────────────────────────────────────────────────
 
@@ -179,6 +303,34 @@ try {
     Write-Warning "Proceeding with transfer — verify replication manually on DVDC01 afterwards."
 }
 
+# ─── Step 2.5: Cloud Sync check on DVDC01 (auto-start verify) ────────────────
+
+Write-Host "`n── Step 2.5: Cloud Sync check on DVDC01 (auto-start verify) ──" -ForegroundColor Yellow
+
+$dc01SyncOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgEast -VMName 'DVDC01'
+if (-not $dc01SyncOk) {
+    Write-Warning "  DVDC01 Cloud Sync agent not fully healthy. Attempting service start..."
+    $startSyncScript = @'
+sc.exe start AADConnectProvisioningAgent | Out-Null
+Start-Sleep -Seconds 30
+$svc = Get-Service -Name 'AADConnectProvisioningAgent' -ErrorAction SilentlyContinue
+Write-Output "Service state after start attempt: $(if ($svc) { $svc.Status } else { 'NOT_FOUND' })"
+'@
+    try {
+        $result = Invoke-RunCommand -ResourceGroup $config.RgEast -VMName 'DVDC01' -ScriptContent $startSyncScript
+        if ($result.Stdout) { Write-Host "  $($result.Stdout.Trim())" -ForegroundColor Gray }
+        Write-Host "  Re-checking Cloud Sync health on DVDC01 (30s wait complete)..." -ForegroundColor Gray
+        $dc01SyncOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgEast -VMName 'DVDC01'
+    } catch {
+        Write-Warning "  Service start attempt on DVDC01 failed: $($_.Exception.Message)"
+    }
+}
+if ($dc01SyncOk) {
+    Write-Host "  [PASS] DVDC01 Cloud Sync agent is healthy." -ForegroundColor Green
+} else {
+    Write-Warning "  [WARN] DVDC01 Cloud Sync agent still has issues. Check HTTPS connectivity and Entra registration."
+}
+
 # ─── Step 3: Transfer FSMO roles to DVDC01 ───────────────────────────────────
 
 Write-Host "`n── Step 3: Transferring FSMO roles to DVDC01 (graceful) ──" -ForegroundColor Yellow
@@ -207,7 +359,7 @@ try {
         if ($result.Stdout -match 'DVDC01') {
             Write-Host "  [FSMO OK] DVDC01 confirmed in FSMO output." -ForegroundColor Green
         } else {
-            Write-Warning "  [FSMO WARN] Could not confirm all roles on DVDC01 — verify manually."
+            Write-Warning "  [FSMO WARN] Could not confirm all roles on DVDC01 - verify manually."
         }
     }
     if ($result.Stderr) { Write-Host "StdErr: $($result.Stderr)" -ForegroundColor Yellow }
@@ -235,7 +387,7 @@ az network vnet update `
     --output none
 if ($LASTEXITCODE -ne 0) { throw "Failed to update DNS on $($config.VnetWest)" }
 
-Write-Host "  VNet DNS restored on both regions → $($config.PrimaryDcIp)" -ForegroundColor Green
+Write-Host "  VNet DNS restored on both regions -> $($config.PrimaryDcIp)" -ForegroundColor Green
 
 # ─── Step 5: Flush DNS cache on all app servers ───────────────────────────────
 
@@ -307,7 +459,7 @@ try {
             if ($result.Stdout -match $checks[$label]) {
                 Write-Host "  $label" -ForegroundColor Green
             } else {
-                Write-Warning "  [WARN] $($label.TrimStart('[PASS] ')) not confirmed — verify manually."
+                Write-Warning "  [WARN] $($label.TrimStart('[PASS] ')) not confirmed - verify manually."
             }
         }
     }
@@ -315,6 +467,41 @@ try {
 } catch {
     Write-Warning "Validation run-command failed: $($_.Exception.Message)"
     Write-Warning "Connect via Bastion to DVDC01 and run: netdom query fsmo && dcdiag /test:advertising"
+}
+
+# ─── Step 6b: Cloud Sync post-failback health on DVDC01 and DVDC03 ───────────
+
+Write-Host "`n── Step 6b: Cloud Sync post-failback health on DVDC01 and DVDC03 ──" -ForegroundColor Yellow
+
+$cloudSyncDC01Summary = 'NOT CHECKED'
+$cloudSyncDC03Summary = 'NOT CHECKED'
+
+Write-Host "  DVDC01 (East - primary, should be Running):" -ForegroundColor Gray
+try {
+    $dc01PostOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgEast -VMName 'DVDC01'
+    $cloudSyncDC01Summary = if ($dc01PostOk) { 'Running / PASS' } else { 'WARNING - see output above' }
+    if ($dc01PostOk) {
+        Write-Host "  [PASS] Cloud Sync agent on DVDC01 is healthy." -ForegroundColor Green
+    } else {
+        Write-Warning "  [WARN] Cloud Sync agent on DVDC01 has issues."
+    }
+} catch {
+    Write-Warning "  Cloud Sync check on DVDC01 failed: $($_.Exception.Message)"
+    $cloudSyncDC01Summary = 'CHECK FAILED'
+}
+
+Write-Host "  DVDC03 (West - standby, should still be Running):" -ForegroundColor Gray
+try {
+    $dc03PostOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgWest -VMName 'DVDC03'
+    $cloudSyncDC03Summary = if ($dc03PostOk) { 'Running / PASS' } else { 'WARNING - see output above' }
+    if ($dc03PostOk) {
+        Write-Host "  [PASS] Cloud Sync agent on DVDC03 is healthy." -ForegroundColor Green
+    } else {
+        Write-Warning "  [WARN] Cloud Sync agent on DVDC03 has issues."
+    }
+} catch {
+    Write-Warning "  Cloud Sync check on DVDC03 failed: $($_.Exception.Message)"
+    $cloudSyncDC03Summary = 'CHECK FAILED'
 }
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
@@ -331,6 +518,8 @@ Summary:
   - DVDC01 (10.1.1.4) holds all 5 FSMO roles
   - Both VNets DNS → 10.1.1.4
   - All 4 app servers DNS flushed
+  - Cloud Sync (DVDC01): $cloudSyncDC01Summary
+  - Cloud Sync (DVDC03): $cloudSyncDC03Summary
 
 Manual validation (via Bastion → DVDC01):
   netdom query fsmo

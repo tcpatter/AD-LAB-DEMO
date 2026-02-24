@@ -76,7 +76,14 @@
       "Bash(az vm restart:*)",
       "Bash(az vm get-instance-view:*)",
       "Bash(/tmp/install-webview2.ps1:*)",
-      "Bash(az rest:*)"
+      "Bash(az rest:*)",
+      "Bash(powershell.exe -NonInteractive -ExecutionPolicy Bypass -File \"deploy/Invoke-Failover.ps1\" -AdminPassword 'L@bAdmin2026!x')",
+      "Bash(powershell.exe -NonInteractive -Command \"& { $null = [System.Management.Automation.Language.Parser]::ParseFile\\(''C:\\\\Users\\\\TerryPatterson\\\\OneDrive - Managed Connections, LTD\\\\Documents\\\\source\\\\repos\\\\AD-Lab\\\\deploy\\\\Invoke-Failover.ps1'', [ref]$null, [ref]$errors\\); if \\($errors.Count -gt 0\\) { $errors | ForEach-Object { Write-Output $_.Message } } else { Write-Output ''SYNTAX OK'' } }\")",
+      "Bash(powershell.exe -NonInteractive -Command \":*)",
+      "Bash(powershell -Command:*)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\TerryPatterson\\\\OneDrive - Managed Connections, LTD\\\\Documents\\\\source\\\\repos\\\\AD-Lab\\\\deploy\\\\Invoke-CloudSyncHealthCheck.ps1\" -AdminPassword 'L@bAdmin2026!x')",
+      "Bash(powershell.exe -Command \":*)",
+      "Bash(git:*)"
     ]
   }
 }

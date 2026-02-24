@@ -10,6 +10,11 @@ This follows Microsoft's guidance:
 - **Unplanned outage** → **seize** FSMO roles on the surviving DC (DVDC03)
 - **Planned failback** → **transfer** FSMO roles gracefully back to DVDC01 (do not seize)
 
+Both orchestrators also check the **Microsoft Entra Cloud Sync** agent
+(`AADConnectProvisioningAgent`) at key points during the exercise. The agents are installed
+on DVDC01 and DVDC03 and will show `REG_PATH_MISSING` until interactively registered to an
+Entra tenant — this is expected in the lab state and does not block the DR exercise.
+
 > **Scope:** This is a lab exercise. DVDC01/DVDC02 are deallocated via az CLI to simulate
 > the outage — they are not destroyed and can be restarted for failback.
 
@@ -123,6 +128,32 @@ Source DSA          largest delta    fails/total %%   error
 [REPL OK] Last sync delta: 2m (threshold: 15m)
 ```
 
+#### Step 1b — Cloud Sync Pre-flight
+
+Checks `AADConnectProvisioningAgent` on both DCs before the simulated outage: DVDC01 as a
+baseline and DVDC03 to confirm the DR agent is ready. Reports service state, registry
+registration, event log entries (last 2 h), and outbound HTTPS connectivity to 4 Entra
+endpoints. Warns if either agent is not healthy but does not abort the failover.
+
+**Expected output (lab state — agents not yet tenant-registered):**
+```
+  DVDC01 (East - baseline before outage):
+    Service:     Running
+    Registered:  REG_PATH_MISSING
+    Conn login.microsoftonline.com: OK
+    Conn management.azure.com: OK
+    Conn login.windows.net: OK
+    Conn aadcdn.msftauthimages.net: OK
+  DVDC03 (West - should be Running):
+    Service:     Running
+    Registered:  REG_PATH_MISSING
+    ...
+```
+
+`REG_PATH_MISSING` is expected until the agent registration wizard is completed
+interactively. See [Cloud Sync REG_PATH_MISSING](#cloud-sync-reg_path_missing) in
+Troubleshooting.
+
 #### Step 2 — Simulate Outage (East VMs deallocated)
 
 Deallocates DVDC01 and DVDC02 asynchronously, then polls until both reach
@@ -135,6 +166,19 @@ Deallocates DVDC01 and DVDC02 asynchronously, then polls until both reach
   DVDC01 — deallocated
   DVDC02 — deallocated
   East region simulated as offline.
+```
+
+#### Step 2.5 — Cloud Sync Continuity Check (DVDC03)
+
+With DVDC01 deallocated, re-checks DVDC03's Cloud Sync agent to confirm it is still
+`Running` and will continue syncing to Entra during the outage. If the agent is not Running,
+the script warns and suggests a remediation command.
+
+**Expected output:**
+```
+  Checking Cloud Sync agent on DVDC03...
+    Service:     Running
+    ...
 ```
 
 #### Step 3 — Seize FSMO Roles (on DVDC03)
@@ -169,6 +213,20 @@ Runs `ipconfig /flushdns && ipconfig /registerdns` on both West app servers.
 [PASS] SYSVOL share
 [PASS] NETLOGON share
 ```
+
+#### Step 6b — Cloud Sync Post-failover Health (DVDC03)
+
+Final Cloud Sync health check on DVDC03. Result is included in the completion summary.
+
+**Expected output:**
+```
+  [PASS] Cloud Sync agent on DVDC03 is healthy.
+
+  Cloud Sync (DVDC03): Running / PASS
+```
+
+If the agent has issues, the summary shows `WARNING - see output above`. Remediation:
+connect via Bastion → DVDC03 and run `Start-Service AADConnectProvisioningAgent`.
 
 ---
 
@@ -217,6 +275,19 @@ Run this after East is ready to resume operations.
 
 ### What the Script Does (step by step)
 
+#### Step 0.5 — Cloud Sync Pre-failback Baseline (DVDC03)
+
+Before starting any East VMs, verifies that DVDC03's Cloud Sync agent is still `Running`
+(it was the sole active sync agent during the failover period). Warns if unhealthy but does
+not abort the failback.
+
+**Expected output:**
+```
+  Checking Cloud Sync agent on DVDC03...
+    Service:     Running
+    ...
+```
+
 #### Step 1 — Start East VMs
 
 Starts DVDC01 and DVDC02 asynchronously, then waits for each VM agent to report Ready.
@@ -245,6 +316,25 @@ SyncAll terminated with no errors.
 ```
 
 If failures are detected, the script waits an extra 60 seconds before continuing.
+
+#### Step 2.5 — Cloud Sync Auto-start Verify (DVDC01)
+
+After DVDC01 boots, checks whether `AADConnectProvisioningAgent` started automatically.
+If the service is not Running, the script attempts `sc.exe start` and re-checks after
+30 seconds. Result is reported before proceeding to FSMO transfer.
+
+**Expected output (service started cleanly):**
+```
+  [PASS] DVDC01 Cloud Sync agent is healthy.
+```
+
+**If service didn't auto-start (script auto-remediates):**
+```
+  [WARN] DVDC01 Cloud Sync not fully healthy. Attempting service start...
+  Service state after start attempt: Running
+  Re-checking Cloud Sync health on DVDC01 (30s wait complete)...
+  [PASS] DVDC01 Cloud Sync agent is healthy.
+```
 
 #### Step 3 — Transfer FSMO Roles (on DVDC01)
 
@@ -277,6 +367,20 @@ Runs `ipconfig /flushdns && ipconfig /registerdns` on DVAS01, DVAS02, DVAS03, an
 [PASS] 0 replication failures
 ```
 
+#### Step 6b — Cloud Sync Post-failback Health (DVDC01 and DVDC03)
+
+Final Cloud Sync health check on both DCs. Both are expected to show `Service: Running`.
+Results appear in the completion summary.
+
+**Expected output:**
+```
+  [PASS] Cloud Sync agent on DVDC01 is healthy.
+  [PASS] Cloud Sync agent on DVDC03 is healthy.
+
+  Cloud Sync (DVDC01): Running / PASS
+  Cloud Sync (DVDC03): Running / PASS
+```
+
 ---
 
 ## Post-Failback Validation
@@ -297,6 +401,41 @@ repadmin /showrepl
 # Full dcdiag sweep
 dcdiag /v
 ```
+
+---
+
+## Cloud Sync Health Check Utility
+
+A standalone script is available to check Cloud Sync agent health and force a service
+restart on both DCs outside of the failover/failback orchestrators:
+
+```powershell
+$pass = az keyvault secret show --vault-name kv-adlab-east --name vm-admin-password --query value -o tsv
+.\deploy\Invoke-CloudSyncHealthCheck.ps1 -AdminPassword $pass
+```
+
+**What it does:**
+
+1. **Pre-restart baseline** — health check on DVDC01 and DVDC03 (service state, registry,
+   event log, 4 HTTPS endpoints)
+2. **Force restart** — stops and starts `AADConnectProvisioningAgent` on each VM, waits for
+   `Running` state, then pauses 30 s for the Entra re-handshake
+3. **Post-restart health** — re-runs health check on both VMs
+4. **Summary** — before/after comparison table
+
+Estimated run time: ~4 minutes. `$ErrorActionPreference = 'Continue'` — always runs to
+completion regardless of individual VM health.
+
+**Typical output (agents installed, not yet tenant-registered):**
+
+```
+Before / After:
+  DVDC01: Service: Running / REG_PATH_MISSING [EXPECTED - agent not tenant-registered]  ->  Service: Running / REG_PATH_MISSING [EXPECTED - agent not tenant-registered]
+  DVDC03: Service: Running / REG_PATH_MISSING [EXPECTED - agent not tenant-registered]  ->  Service: Running / REG_PATH_MISSING [EXPECTED - agent not tenant-registered]
+```
+
+Use this script after any DR exercise to confirm both agents recovered cleanly, or
+any time you want to confirm HTTPS connectivity to Entra endpoints is working.
 
 ---
 
@@ -398,6 +537,48 @@ repadmin /removelingeringobjects DVDC01 DVDC03 "DC=managed-connections,DC=net"
 
 # Full consistency check
 dcdiag /test:replications
+```
+
+---
+
+### Cloud Sync REG_PATH_MISSING
+
+**Symptom:** Health check shows `Registered: REG_PATH_MISSING` on DVDC01 or DVDC03.
+
+**Cause:** The `AADConnectProvisioningAgent` service is installed and running, but the agent
+has not yet been registered to an Entra tenant. The registry key
+`HKLM:\SOFTWARE\Microsoft\Azure AD Connect Provisioning Agent` is only created during the
+interactive registration wizard.
+
+This **does not block** the DR exercise. AD replication, FSMO operations, and all DNS
+functions are unaffected.
+
+**Fix (when ready to register):**
+1. Connect via Bastion → DVDC01 (then repeat for DVDC03)
+2. Run the Microsoft Entra Connect Provisioning Agent configuration wizard
+3. Sign in with a Global Administrator account when prompted
+4. Confirm: `(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Azure AD Connect Provisioning Agent').TenantId`
+
+---
+
+### Cloud Sync Service Not Running After Failback
+
+**Symptom:** Post-failback health check shows `Service: Stopped` on DVDC01.
+
+**Cause:** Service startup type may be Manual, or a delayed auto-start did not trigger
+before the health check ran.
+
+**Fix:**
+```powershell
+# Via Bastion → DVDC01
+Start-Service AADConnectProvisioningAgent
+Set-Service AADConnectProvisioningAgent -StartupType Automatic
+Get-Service AADConnectProvisioningAgent   # confirm Running
+```
+
+Or use the health check script to force-restart both agents:
+```powershell
+.\deploy\Invoke-CloudSyncHealthCheck.ps1 -AdminPassword $pass
 ```
 
 ---

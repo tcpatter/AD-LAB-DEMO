@@ -135,8 +135,12 @@ DVDC02  10.1.1.5              (bidirectional VNet peering)
 DVDC03 is a fully promoted replica DC. In a simulated East outage, all 5 FSMO roles are **seized** onto
 DVDC03. During failback, roles are **transferred** (not seized) back to DVDC01 once replication is healthy.
 
+Both orchestrators include **Cloud Sync health checks** at key points (pre-outage baseline, continuity
+check during outage, post-operation health) to confirm `AADConnectProvisioningAgent` state throughout
+the exercise.
+
 See [docs/DR-Runbook.md](docs/DR-Runbook.md) for the full runbook including pre-flight checklist,
-expected output, post-validation steps, and troubleshooting.
+expected output, Cloud Sync health check steps, post-validation steps, and troubleshooting.
 
 ### Quick Start
 
@@ -146,6 +150,10 @@ expected output, post-validation steps, and troubleshooting.
 
 # Failback: West → East (~25 min) — restores East as primary
 .\deploy\Invoke-Failback.ps1 -AdminPassword 'L@bAdmin2026!x'
+
+# Cloud Sync health check + force-restart (~4 min) — standalone, safe to run anytime
+$pass = az keyvault secret show --vault-name kv-adlab-east --name vm-admin-password --query value -o tsv
+.\deploy\Invoke-CloudSyncHealthCheck.ps1 -AdminPassword $pass
 ```
 
 ## Project Structure
@@ -169,9 +177,10 @@ AD-Lab/
 │       └── storage/
 │           └── storageaccount.bicep  # Storage for deployment scripts
 ├── deploy/
-│   ├── deploy.ps1              # 6-phase PowerShell orchestrator (az cli)
-│   ├── Invoke-Failover.ps1     # DR failover: East US 2 → Central US
-│   └── Invoke-Failback.ps1     # DR failback: Central US → East US 2
+│   ├── deploy.ps1                    # 6-phase PowerShell orchestrator (az cli)
+│   ├── Invoke-Failover.ps1           # DR failover: East US 2 → Central US
+│   ├── Invoke-Failback.ps1           # DR failback: Central US → East US 2
+│   └── Invoke-CloudSyncHealthCheck.ps1  # Cloud Sync health check + force-restart (DVDC01/DVDC03)
 ├── docs/
 │   └── DR-Runbook.md           # Full DR runbook with troubleshooting guide
 └── scripts/
@@ -244,10 +253,11 @@ az network bastion list -o table         # 2 Bastions (Standard SKU)
 
 The following phases are planned for future work:
 
-1. **Entra Sync** — Microsoft Entra Connect / Cloud Sync to Entra ID
+1. **Entra Sync registration** — Complete the Cloud Sync agent registration wizard on DVDC01
+   and DVDC03 (agents are installed; interactive Entra sign-in required to register)
 2. **Global Secure Access** — GSA agent deployment and policy testing
 
-**Completed phases** (Phases 1–6 of `deploy.ps1` plus DR exercise):
+**Completed phases** (Phases 1–6 of `deploy.ps1` plus DR and Cloud Sync):
 - Infrastructure (RGs, VNets, NSGs, Bastion, Storage)
 - Virtual Machines (7 VMs, Standard_B2s, Windows Server 2022)
 - Primary DC Promotion (DVDC01 as forest root `managed-connections.net`)
@@ -255,4 +265,5 @@ The following phases are planned for future work:
 - Secondary DC Promotions (DVDC02 East, DVDC03 West as replica DCs)
 - App Server Domain Join (DVAS01–04 joined, IIS + File Server roles)
 - AD Configuration (OU structure, 100 test users, 18 department security groups)
-- DR Failover / Failback exercise (FSMO seize/transfer, VNet DNS redirect)
+- DR Failover / Failback exercise (FSMO seize/transfer, VNet DNS redirect, Cloud Sync health checks)
+- Entra Cloud Sync agent installation (DVDC01 and DVDC03; pending tenant registration)
