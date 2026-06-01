@@ -30,13 +30,18 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# ─── Subscription ────────────────────────────────────────────────────────────
+
+az account set --subscription '64d83543-8eda-43a0-b42f-a92876dfb11d'
+if ($LASTEXITCODE -ne 0) { throw "Failed to set subscription context." }
+
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 $config = @{
-    RgEast      = 'rg-ADLab-East'
-    RgWest      = 'rg-ADLab-West'
+    RgEast      = 'rg-east'
+    RgCentral   = 'rg-central'
     VnetEast    = 'vnet-adlab-east'
-    VnetWest    = 'vnet-adlab-west'
+    VnetCentral = 'vnet-adlab-central'
     PrimaryDcIp = '10.1.1.4'
     DomainName  = 'managed-connections.net'
     ScriptsPath = Join-Path $PSScriptRoot '..\scripts\powershell'
@@ -228,7 +233,7 @@ Write-Host "`nStarted: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundCol
 Write-Host "`n── Step 0.5: Cloud Sync pre-failback baseline on DVDC03 ──" -ForegroundColor Yellow
 Write-Host "  Verifying DVDC03 sync agent is still Running (it was sole agent post-failover)..." -ForegroundColor Gray
 
-$dc03BaseOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgWest -VMName 'DVDC03'
+$dc03BaseOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgCentral -VMName 'DVDC03'
 if (-not $dc03BaseOk) {
     Write-Warning "  DVDC03 Cloud Sync agent is not fully healthy."
     Write-Warning "  Remediation: Connect via Bastion - DVDC03 and run: Start-Service AADConnectProvisioningAgent"
@@ -284,7 +289,7 @@ Stop-Transcript
 '@
 
 try {
-    $result = Invoke-RunCommand -ResourceGroup $config.RgWest -VMName 'DVDC03' -ScriptContent $syncScript
+    $result = Invoke-RunCommand -ResourceGroup $config.RgCentral -VMName 'DVDC03' -ScriptContent $syncScript
     if ($result.Stdout) {
         Write-Host $result.Stdout -ForegroundColor Cyan
 
@@ -379,13 +384,13 @@ az network vnet update `
     --output none
 if ($LASTEXITCODE -ne 0) { throw "Failed to update DNS on $($config.VnetEast)" }
 
-Write-Host "  Updating $($config.VnetWest)..." -ForegroundColor Gray
+Write-Host "  Updating $($config.VnetCentral)..." -ForegroundColor Gray
 az network vnet update `
-    -g $config.RgWest `
-    -n $config.VnetWest `
+    -g $config.RgCentral `
+    -n $config.VnetCentral `
     --dns-servers $config.PrimaryDcIp `
     --output none
-if ($LASTEXITCODE -ne 0) { throw "Failed to update DNS on $($config.VnetWest)" }
+if ($LASTEXITCODE -ne 0) { throw "Failed to update DNS on $($config.VnetCentral)" }
 
 Write-Host "  VNet DNS restored on both regions -> $($config.PrimaryDcIp)" -ForegroundColor Green
 
@@ -400,7 +405,7 @@ Write-Output "DNS cache flushed and re-registered on $env:COMPUTERNAME"
 '@
 
 $eastAppVMs = @('DVAS01', 'DVAS02')
-$westAppVMs = @('DVAS03', 'DVAS04')
+$centralAppVMs = @('DVAS03', 'DVAS04')
 
 foreach ($vm in $eastAppVMs) {
     Write-Host "  Flushing DNS on $vm (East)..." -ForegroundColor Gray
@@ -412,15 +417,16 @@ foreach ($vm in $eastAppVMs) {
     }
 }
 
-foreach ($vm in $westAppVMs) {
-    Write-Host "  Flushing DNS on $vm (West)..." -ForegroundColor Gray
+foreach ($vm in $centralAppVMs) {
+    Write-Host "  Flushing DNS on $vm (Central)..." -ForegroundColor Gray
     try {
-        $result = Invoke-RunCommand -ResourceGroup $config.RgWest -VMName $vm -ScriptContent $flushScript
+        $result = Invoke-RunCommand -ResourceGroup $config.RgCentral -VMName $vm -ScriptContent $flushScript
         if ($result.Stdout) { Write-Host "  $($result.Stdout.Trim())" -ForegroundColor Green }
     } catch {
         Write-Warning "  DNS flush on $vm failed: $($_.Exception.Message)"
     }
 }
+
 
 # ─── Step 6: Validate East region DC ─────────────────────────────────────────
 
@@ -490,9 +496,9 @@ try {
     $cloudSyncDC01Summary = 'CHECK FAILED'
 }
 
-Write-Host "  DVDC03 (West - standby, should still be Running):" -ForegroundColor Gray
+Write-Host "  DVDC03 (Central - standby, should still be Running):" -ForegroundColor Gray
 try {
-    $dc03PostOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgWest -VMName 'DVDC03'
+    $dc03PostOk = Test-CloudSyncAgentHealth -ResourceGroup $config.RgCentral -VMName 'DVDC03'
     $cloudSyncDC03Summary = if ($dc03PostOk) { 'Running / PASS' } else { 'WARNING - see output above' }
     if ($dc03PostOk) {
         Write-Host "  [PASS] Cloud Sync agent on DVDC03 is healthy." -ForegroundColor Green

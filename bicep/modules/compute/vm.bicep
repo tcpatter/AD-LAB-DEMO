@@ -8,7 +8,7 @@ param location string
 param subnetId string
 
 @description('VM size')
-param vmSize string = 'Standard_B2s'
+param vmSize string = 'Standard_D2als_v7'
 
 @description('Admin username')
 param adminUsername string
@@ -28,6 +28,9 @@ param nsgId string = ''
 
 @description('Size of optional data disk in GB (0 = no data disk)')
 param dataDiskSizeGB int = 0
+
+@description('Daily auto-shutdown time in 24h HHmm format (empty = disabled)')
+param autoShutdownTime string = ''
 
 @description('Tags for the resource')
 param tags object = {}
@@ -115,6 +118,24 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
           id: nic.id
         }
       ]
+    }
+  }
+}
+
+resource autoShutdown 'Microsoft.DevTestLab/schedules@2018-09-15' = if (!empty(autoShutdownTime)) {
+  name: 'shutdown-computevm-${vmName}'
+  location: location
+  tags: tags
+  properties: {
+    status: 'Enabled'
+    taskType: 'ComputeVmShutdownTask'
+    dailyRecurrence: {
+      time: autoShutdownTime
+    }
+    timeZoneId: 'Eastern Standard Time'
+    targetResourceId: vm.id
+    notificationSettings: {
+      status: 'Disabled'
     }
   }
 }

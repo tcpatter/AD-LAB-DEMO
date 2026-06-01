@@ -36,11 +36,15 @@ param(
 $ErrorActionPreference = 'Continue'
 Set-StrictMode -Version Latest
 
+# ─── Subscription ────────────────────────────────────────────────────────────
+
+az account set --subscription '64d83543-8eda-43a0-b42f-a92876dfb11d' | Out-Null
+
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 $config = @{
-    RgEast = 'rg-ADLab-East'
-    RgWest = 'rg-ADLab-West'
+    RgEast    = 'rg-east'
+    RgCentral = 'rg-central'
 }
 
 # ─── Helper: Run remote PowerShell via az vm run-command ─────────────────────
@@ -224,7 +228,7 @@ Write-Host "  DVDC01 (East US 2):" -ForegroundColor Gray
 $pre01 = Test-CloudSyncAgentHealth -ResourceGroup $config.RgEast -VMName 'DVDC01'
 
 Write-Host "  DVDC03 (Central US):" -ForegroundColor Gray
-$pre03 = Test-CloudSyncAgentHealth -ResourceGroup $config.RgWest -VMName 'DVDC03'
+$pre03 = Test-CloudSyncAgentHealth -ResourceGroup $config.RgCentral -VMName 'DVDC03'
 
 # ─── Step 2: Force service restart ────────────────────────────────────────────
 
@@ -240,7 +244,7 @@ Write-Output "RESTART_STATUS: $((Get-Service AADConnectProvisioningAgent).Status
 
 $vmsToRestart = @(
     @{ Name = 'DVDC01'; Rg = $config.RgEast },
-    @{ Name = 'DVDC03'; Rg = $config.RgWest }
+    @{ Name = 'DVDC03'; Rg = $config.RgCentral }
 )
 
 foreach ($vm in $vmsToRestart) {
@@ -272,7 +276,7 @@ Write-Host "  DVDC01 (East US 2):" -ForegroundColor Gray
 $post01 = Test-CloudSyncAgentHealth -ResourceGroup $config.RgEast -VMName 'DVDC01'
 
 Write-Host "  DVDC03 (Central US):" -ForegroundColor Gray
-$post03 = Test-CloudSyncAgentHealth -ResourceGroup $config.RgWest -VMName 'DVDC03'
+$post03 = Test-CloudSyncAgentHealth -ResourceGroup $config.RgCentral -VMName 'DVDC03'
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 

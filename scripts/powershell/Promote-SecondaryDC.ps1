@@ -20,10 +20,9 @@ New-Item -Path "C:\Logs" -ItemType Directory -Force | Out-Null
 Start-Transcript -Path "C:\Logs\Promote-SecondaryDC.log" -Append
 
 try {
-    # Point DNS to Primary DC for domain resolution
-    Write-Output "Setting DNS client to Primary DC ($PrimaryDcIp)..."
-    $adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1
-    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $PrimaryDcIp
+    # DNS is provided by VNet DHCP (set to PrimaryDcIp in Phase 4) — no manual override needed.
+    # Set-DnsClientServerAddress is unreliable on Azure VMs (DHCP-managed adapters).
+    Write-Output "DNS server: $((Get-DnsClientServerAddress | Where-Object AddressFamily -eq 2 | Select-Object -First 1).ServerAddresses -join ', ')"
 
     Write-Output "Installing AD DS and DNS features..."
     Install-WindowsFeature -Name AD-Domain-Services, DNS -IncludeManagementTools

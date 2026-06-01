@@ -37,13 +37,18 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# ─── Subscription ────────────────────────────────────────────────────────────
+
+az account set --subscription '64d83543-8eda-43a0-b42f-a92876dfb11d'
+if ($LASTEXITCODE -ne 0) { throw "Failed to set subscription context." }
+
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 $config = @{
-    RgEast         = 'rg-ADLab-East'
-    RgWest         = 'rg-ADLab-West'
+    RgEast         = 'rg-east'
+    RgCentral      = 'rg-central'
     StorageAccount = 'stadlabscripts01'
-    StorageRg      = 'rg-ADLab-East'
+    StorageRg      = 'rg-east'
     ContainerName  = 'scripts'
     BlobName       = 'AADConnectProvisioningAgentSetup.exe'
     ScriptsPath    = Join-Path $PSScriptRoot '..\scripts\powershell'
@@ -146,7 +151,7 @@ try {
 Write-Host "`n── Step 3: Cloud Sync prerequisites — DVDC03 ──" -ForegroundColor Yellow
 
 try {
-    $result = Invoke-RunCommand -ResourceGroup $config.RgWest -VMName 'DVDC03' -ScriptContent $prereqScript
+    $result = Invoke-RunCommand -ResourceGroup $config.RgCentral -VMName 'DVDC03' -ScriptContent $prereqScript
     if ($result.Stdout) { Write-Host $result.Stdout -ForegroundColor Cyan }
     if ($result.Stderr) { Write-Host "StdErr: $($result.Stderr)" -ForegroundColor Yellow }
 
@@ -230,7 +235,7 @@ try {
 Write-Host "`n── Step 6: Delivering installer to DVDC03 ──" -ForegroundColor Yellow
 
 try {
-    $result = Invoke-RunCommand -ResourceGroup $config.RgWest -VMName 'DVDC03' -ScriptContent $downloadScript
+    $result = Invoke-RunCommand -ResourceGroup $config.RgCentral -VMName 'DVDC03' -ScriptContent $downloadScript
     if ($result.Stdout) { Write-Host $result.Stdout -ForegroundColor Cyan }
     if ($result.Stderr) { Write-Host "StdErr: $($result.Stderr)" -ForegroundColor Yellow }
     if ($result.Stdout -match 'Download complete') {
@@ -260,7 +265,7 @@ What was automated:
 ─────────────────────────────────────────────────────────
 
 STEP A — Install on DVDC01 (primary — do first):
-  1. Azure Portal → rg-ADLab-East → DVDC01 → Connect → Bastion
+  1. Azure Portal → rg-east → DVDC01 → Connect → Bastion
   2. Open PowerShell as Administrator and run:
        C:\Temp\AADConnectProvisioningAgentSetup.exe
   3. Accept license terms
@@ -273,7 +278,7 @@ STEP A — Install on DVDC01 (primary — do first):
   6. Complete the wizard — agent registers with Entra tenant
 
 STEP B — Install on DVDC03 (failover DC — do after DVDC01):
-  1. Azure Portal → rg-ADLab-West → DVDC03 → Connect → Bastion
+  1. Azure Portal → rg-east → bas-adlab-east → Connect to DVDC03 (via peering)
   2. Open PowerShell as Administrator and run:
        C:\Temp\AADConnectProvisioningAgentSetup.exe
   3. Sign in with the same HIA account used in Step A

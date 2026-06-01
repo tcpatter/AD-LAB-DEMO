@@ -36,12 +36,12 @@ param tags object = {
 // ─── Variables ──────────────────────────────────────────────────────────────
 
 var eastRegion = 'eastus2'
-var westRegion = 'centralus'
-var rgNameEast = 'rg-ADLab-East'
-var rgNameWest = 'rg-ADLab-West'
+var centralRegion = 'centralus'
+var rgNameEast = 'rg-east'
+var rgNameCentral = 'rg-central'
 
 var eastVnetName = 'vnet-adlab-east'
-var westVnetName = 'vnet-adlab-west'
+var centralVnetName = 'vnet-adlab-central'
 
 // Domain configuration
 var domainName = 'managed-connections.net'
@@ -49,27 +49,14 @@ var netbiosName = 'MANAGED'
 var domainDN = 'DC=${replace(domainName, '.', ',DC=')}'
 var scriptBaseUrl = 'https://${storageAccountName}.blob.core.windows.net/scripts'
 
-// ─── Resource Groups ────────────────────────────────────────────────────────
+// ─── Resource Groups (pre-existing) ─────────────────────────────────────────
 
-resource rgEast 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deployPhase == 'infra') {
-  name: rgNameEast
-  location: eastRegion
-  tags: tags
-}
-
-resource rgWest 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deployPhase == 'infra') {
-  name: rgNameWest
-  location: westRegion
-  tags: tags
-}
-
-// Use existing RGs for phases after infra
-resource rgEastExisting 'Microsoft.Resources/resourceGroups@2024-03-01' existing = if (deployPhase != 'infra') {
+resource rgEast 'Microsoft.Resources/resourceGroups@2024-03-01' existing = {
   name: rgNameEast
 }
 
-resource rgWestExisting 'Microsoft.Resources/resourceGroups@2024-03-01' existing = if (deployPhase != 'infra') {
-  name: rgNameWest
+resource rgCentral 'Microsoft.Resources/resourceGroups@2024-03-01' existing = {
+  name: rgNameCentral
 }
 
 // ─── Phase: infra ───────────────────────────────────────────────────────────
@@ -160,13 +147,13 @@ module nsgEastBastion 'modules/network/nsg-bastion.bicep' = if (deployPhase == '
   }
 }
 
-// West NSGs
-module nsgWestDc 'modules/network/nsg.bicep' = if (deployPhase == 'infra') {
-  scope: rgWest
-  name: 'nsg-west-dc'
+// Central NSGs
+module nsgCentralDc 'modules/network/nsg.bicep' = if (deployPhase == 'infra') {
+  scope: rgCentral
+  name: 'nsg-central-dc'
   params: {
-    nsgName: 'nsg-adlab-west-dc'
-    location: westRegion
+    nsgName: 'nsg-adlab-central-dc'
+    location: centralRegion
     tags: tags
     securityRules: [
       {
@@ -183,12 +170,12 @@ module nsgWestDc 'modules/network/nsg.bicep' = if (deployPhase == 'infra') {
   }
 }
 
-module nsgWestApp 'modules/network/nsg.bicep' = if (deployPhase == 'infra') {
-  scope: rgWest
-  name: 'nsg-west-app'
+module nsgCentralApp 'modules/network/nsg.bicep' = if (deployPhase == 'infra') {
+  scope: rgCentral
+  name: 'nsg-central-app'
   params: {
-    nsgName: 'nsg-adlab-west-app'
-    location: westRegion
+    nsgName: 'nsg-adlab-central-app'
+    location: centralRegion
     tags: tags
     securityRules: [
       {
@@ -225,16 +212,6 @@ module nsgWestApp 'modules/network/nsg.bicep' = if (deployPhase == 'infra') {
   }
 }
 
-module nsgWestBastion 'modules/network/nsg-bastion.bicep' = if (deployPhase == 'infra') {
-  scope: rgWest
-  name: 'nsg-west-bastion'
-  params: {
-    nsgName: 'nsg-adlab-west-bastion'
-    location: westRegion
-    tags: tags
-  }
-}
-
 // East VNet
 module vnetEast 'modules/network/vnet.bicep' = if (deployPhase == 'infra') {
   scope: rgEast
@@ -264,36 +241,31 @@ module vnetEast 'modules/network/vnet.bicep' = if (deployPhase == 'infra') {
   }
 }
 
-// West VNet
-module vnetWest 'modules/network/vnet.bicep' = if (deployPhase == 'infra') {
-  scope: rgWest
-  name: 'vnet-west'
+// Central VNet — no Bastion (uses East Bastion via VNet peering)
+module vnetCentral 'modules/network/vnet.bicep' = if (deployPhase == 'infra') {
+  scope: rgCentral
+  name: 'vnet-central'
   params: {
-    vnetName: westVnetName
-    location: westRegion
+    vnetName: centralVnetName
+    location: centralRegion
     addressPrefix: '10.3.0.0/16'
     tags: tags
     subnets: [
       {
         name: 'snet-dc'
         addressPrefix: '10.3.1.0/24'
-        nsgId: nsgWestDc.outputs.nsgId
+        nsgId: nsgCentralDc.outputs.nsgId
       }
       {
         name: 'snet-app'
         addressPrefix: '10.3.2.0/24'
-        nsgId: nsgWestApp.outputs.nsgId
-      }
-      {
-        name: 'AzureBastionSubnet'
-        addressPrefix: '10.3.3.0/24'
-        nsgId: nsgWestBastion.outputs.nsgId
+        nsgId: nsgCentralApp.outputs.nsgId
       }
     ]
   }
 }
 
-// Bastion hosts
+// East Bastion (Standard SKU — tunneling enabled; reaches Central VMs via peering)
 module bastionEast 'modules/network/bastion.bicep' = if (deployPhase == 'infra') {
   scope: rgEast
   name: 'bastion-east'
@@ -305,15 +277,27 @@ module bastionEast 'modules/network/bastion.bicep' = if (deployPhase == 'infra')
   }
 }
 
-module bastionWest 'modules/network/bastion.bicep' = if (deployPhase == 'infra') {
-  scope: rgWest
-  name: 'bastion-west'
+// VNet peering — East ↔ Central (bidirectional, enables single Bastion to reach both regions)
+module peeringEastToCentral 'modules/network/peering.bicep' = if (deployPhase == 'infra') {
+  scope: rgEast
+  name: 'peering-east-to-central'
   params: {
-    bastionName: 'bas-adlab-west'
-    location: westRegion
-    subnetId: vnetWest.outputs.subnetIds[2]
-    tags: tags
+    peeringName: 'peer-east-to-central'
+    localVnetName: eastVnetName
+    remoteVnetId: vnetCentral.outputs.vnetId
   }
+  dependsOn: [vnetEast, vnetCentral]
+}
+
+module peeringCentralToEast 'modules/network/peering.bicep' = if (deployPhase == 'infra') {
+  scope: rgCentral
+  name: 'peering-central-to-east'
+  params: {
+    peeringName: 'peer-central-to-east'
+    localVnetName: centralVnetName
+    remoteVnetId: vnetEast.outputs.vnetId
+  }
+  dependsOn: [vnetEast, vnetCentral]
 }
 
 // Storage account
@@ -329,42 +313,40 @@ module storage 'modules/storage/storageaccount.bicep' = if (deployPhase == 'infr
 
 // ─── Phase: vms ─────────────────────────────────────────────────────────────
 
-// Need to reference existing VNets for VM deployment
 resource vnetEastExisting 'Microsoft.Network/virtualNetworks@2024-01-01' existing = if (deployPhase == 'vms') {
-  scope: rgEastExisting
+  scope: rgEast
   name: eastVnetName
 }
 
-resource vnetWestExisting 'Microsoft.Network/virtualNetworks@2024-01-01' existing = if (deployPhase == 'vms') {
-  scope: rgWestExisting
-  name: westVnetName
+resource vnetCentralExisting 'Microsoft.Network/virtualNetworks@2024-01-01' existing = if (deployPhase == 'vms') {
+  scope: rgCentral
+  name: centralVnetName
 }
 
-// Existing NSGs for VM NIC associations
 resource nsgEastDcExisting 'Microsoft.Network/networkSecurityGroups@2024-01-01' existing = if (deployPhase == 'vms') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'nsg-adlab-east-dc'
 }
 
 resource nsgEastAppExisting 'Microsoft.Network/networkSecurityGroups@2024-01-01' existing = if (deployPhase == 'vms') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'nsg-adlab-east-app'
 }
 
-resource nsgWestDcExisting 'Microsoft.Network/networkSecurityGroups@2024-01-01' existing = if (deployPhase == 'vms') {
-  scope: rgWestExisting
-  name: 'nsg-adlab-west-dc'
+resource nsgCentralDcExisting 'Microsoft.Network/networkSecurityGroups@2024-01-01' existing = if (deployPhase == 'vms') {
+  scope: rgCentral
+  name: 'nsg-adlab-central-dc'
 }
 
-resource nsgWestAppExisting 'Microsoft.Network/networkSecurityGroups@2024-01-01' existing = if (deployPhase == 'vms') {
-  scope: rgWestExisting
-  name: 'nsg-adlab-west-app'
+resource nsgCentralAppExisting 'Microsoft.Network/networkSecurityGroups@2024-01-01' existing = if (deployPhase == 'vms') {
+  scope: rgCentral
+  name: 'nsg-adlab-central-app'
 }
 
 // ── East VMs ──
 
 module vmDvdc01 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'vm-dvdc01'
   params: {
     vmName: 'DVDC01'
@@ -376,12 +358,13 @@ module vmDvdc01 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
     createPublicIp: false
     nsgId: nsgEastDcExisting.id
     dataDiskSizeGB: 20
+    autoShutdownTime: '1900'
     tags: tags
   }
 }
 
 module vmDvdc02 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'vm-dvdc02'
   params: {
     vmName: 'DVDC02'
@@ -393,12 +376,13 @@ module vmDvdc02 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
     createPublicIp: false
     nsgId: nsgEastDcExisting.id
     dataDiskSizeGB: 20
+    autoShutdownTime: '1900'
     tags: tags
   }
 }
 
 module vmDvas01 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'vm-dvas01'
   params: {
     vmName: 'DVAS01'
@@ -409,12 +393,13 @@ module vmDvas01 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
     privateIpAddress: '10.1.2.4'
     createPublicIp: false
     nsgId: nsgEastAppExisting.id
+    autoShutdownTime: '1900'
     tags: tags
   }
 }
 
 module vmDvas02 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'vm-dvas02'
   params: {
     vmName: 'DVAS02'
@@ -425,71 +410,74 @@ module vmDvas02 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
     privateIpAddress: '10.1.2.5'
     createPublicIp: false
     nsgId: nsgEastAppExisting.id
+    autoShutdownTime: '1900'
     tags: tags
   }
 }
 
-// ── West VMs ──
+// ── Central VMs ──
 
 module vmDvdc03 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
-  scope: rgWestExisting
+  scope: rgCentral
   name: 'vm-dvdc03'
   params: {
     vmName: 'DVDC03'
-    location: westRegion
-    subnetId: '${vnetWestExisting.id}/subnets/snet-dc'
+    location: centralRegion
+    subnetId: '${vnetCentralExisting.id}/subnets/snet-dc'
     adminUsername: adminUsername
     adminPassword: adminPassword
     privateIpAddress: '10.3.1.4'
     createPublicIp: false
-    nsgId: nsgWestDcExisting.id
+    nsgId: nsgCentralDcExisting.id
     dataDiskSizeGB: 20
+    autoShutdownTime: '1900'
     tags: tags
   }
 }
 
 module vmDvas03 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
-  scope: rgWestExisting
+  scope: rgCentral
   name: 'vm-dvas03'
   params: {
     vmName: 'DVAS03'
-    location: westRegion
-    subnetId: '${vnetWestExisting.id}/subnets/snet-app'
+    location: centralRegion
+    subnetId: '${vnetCentralExisting.id}/subnets/snet-app'
     adminUsername: adminUsername
     adminPassword: adminPassword
     privateIpAddress: '10.3.2.4'
     createPublicIp: false
-    nsgId: nsgWestAppExisting.id
+    nsgId: nsgCentralAppExisting.id
+    autoShutdownTime: '1900'
     tags: tags
   }
 }
 
 module vmDvas04 'modules/compute/vm.bicep' = if (deployPhase == 'vms') {
-  scope: rgWestExisting
+  scope: rgCentral
   name: 'vm-dvas04'
   params: {
     vmName: 'DVAS04'
-    location: westRegion
-    subnetId: '${vnetWestExisting.id}/subnets/snet-app'
+    location: centralRegion
+    subnetId: '${vnetCentralExisting.id}/subnets/snet-app'
     adminUsername: adminUsername
     adminPassword: adminPassword
     privateIpAddress: '10.3.2.5'
     createPublicIp: false
-    nsgId: nsgWestAppExisting.id
+    nsgId: nsgCentralAppExisting.id
+    autoShutdownTime: '1900'
     tags: tags
   }
 }
 
 // ─── Phase: primarydc ──────────────────────────────────────────────────────
 
-// Existing DVDC01 VM for CSE attachment
 resource vmDvdc01Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'primarydc') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'DVDC01'
 }
 
 module cseDvdc01Promote 'modules/compute/vm-extension.bicep' = if (deployPhase == 'primarydc') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'cse-dvdc01-promote'
   params: {
     vmName: vmDvdc01Existing.name
@@ -505,17 +493,17 @@ module cseDvdc01Promote 'modules/compute/vm-extension.bicep' = if (deployPhase =
 // ── East member servers ──
 
 resource vmDvas01Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'domainjoin') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'DVAS01'
 }
 
 resource vmDvas02Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'domainjoin') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'DVAS02'
 }
 
 module cseDvas01Join 'modules/compute/vm-extension.bicep' = if (deployPhase == 'domainjoin') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'cse-dvas01-join'
   params: {
     vmName: vmDvas01Existing.name
@@ -527,7 +515,7 @@ module cseDvas01Join 'modules/compute/vm-extension.bicep' = if (deployPhase == '
 }
 
 module cseDvas02Join 'modules/compute/vm-extension.bicep' = if (deployPhase == 'domainjoin') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'cse-dvas02-join'
   params: {
     vmName: vmDvas02Existing.name
@@ -538,24 +526,24 @@ module cseDvas02Join 'modules/compute/vm-extension.bicep' = if (deployPhase == '
   }
 }
 
-// ── West member servers ──
+// ── Central member servers ──
 
 resource vmDvas03Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'domainjoin') {
-  scope: rgWestExisting
+  scope: rgCentral
   name: 'DVAS03'
 }
 
 resource vmDvas04Existing 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'domainjoin') {
-  scope: rgWestExisting
+  scope: rgCentral
   name: 'DVAS04'
 }
 
 module cseDvas03Join 'modules/compute/vm-extension.bicep' = if (deployPhase == 'domainjoin') {
-  scope: rgWestExisting
+  scope: rgCentral
   name: 'cse-dvas03-join'
   params: {
     vmName: vmDvas03Existing.name
-    location: westRegion
+    location: centralRegion
     scriptUri: '${scriptBaseUrl}/Join-DomainAndConfigure.ps1${scriptSasToken}'
     commandToExecute: 'powershell -ExecutionPolicy Bypass -File Join-DomainAndConfigure.ps1 -DomainName "${domainName}" -DcIpAddress "10.1.1.4" -DomainAdminUser "${adminUsername}" -DomainAdminPassword "${adminPassword}"'
     tags: tags
@@ -563,11 +551,11 @@ module cseDvas03Join 'modules/compute/vm-extension.bicep' = if (deployPhase == '
 }
 
 module cseDvas04Join 'modules/compute/vm-extension.bicep' = if (deployPhase == 'domainjoin') {
-  scope: rgWestExisting
+  scope: rgCentral
   name: 'cse-dvas04-join'
   params: {
     vmName: vmDvas04Existing.name
-    location: westRegion
+    location: centralRegion
     scriptUri: '${scriptBaseUrl}/Join-DomainAndConfigure.ps1${scriptSasToken}'
     commandToExecute: 'powershell -ExecutionPolicy Bypass -File Join-DomainAndConfigure.ps1 -DomainName "${domainName}" -DcIpAddress "10.1.1.4" -DomainAdminUser "${adminUsername}" -DomainAdminPassword "${adminPassword}"'
     tags: tags
@@ -577,12 +565,12 @@ module cseDvas04Join 'modules/compute/vm-extension.bicep' = if (deployPhase == '
 // ─── Phase: groups ───────────────────────────────────────────────────────────
 
 resource vmDvdc01Groups 'Microsoft.Compute/virtualMachines@2024-03-01' existing = if (deployPhase == 'groups') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'DVDC01'
 }
 
 module cseDvdc01Groups 'modules/compute/vm-extension.bicep' = if (deployPhase == 'groups') {
-  scope: rgEastExisting
+  scope: rgEast
   name: 'cse-dvdc01-groups'
   params: {
     vmName: vmDvdc01Groups.name

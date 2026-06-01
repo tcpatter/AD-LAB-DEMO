@@ -83,7 +83,22 @@
       "Bash(powershell -Command:*)",
       "Bash(powershell.exe -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\TerryPatterson\\\\OneDrive - Managed Connections, LTD\\\\Documents\\\\source\\\\repos\\\\AD-Lab\\\\deploy\\\\Invoke-CloudSyncHealthCheck.ps1\" -AdminPassword 'L@bAdmin2026!x')",
       "Bash(powershell.exe -Command \":*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(az group *)",
+      "Bash(az keyvault *)",
+      "Bash(powershell -ExecutionPolicy Bypass -File deploy\\\\deploy.ps1 -Phase 1 -AdminPassword 'L@bAdmin2026!x' -SafeModePassword 'L@bAdmin2026!x')",
+      "Bash(powershell.exe *)",
+      "Bash(az vm *)",
+      "Bash(python3 -c ' *)",
+      "Bash(az storage account show *)",
+      "Bash(az storage account update *)",
+      "Bash(sleep *)",
+      "Bash(while *)",
+      "Bash(for *)",
+      "Bash(az network vnet update:*)",
+      "Bash(az network vnet update *)",
+      "PowerShell(*)",
+      "Write(*)"
     ]
   }
 }
